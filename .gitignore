@@ -1,0 +1,10 @@
+# 独立 git 仓库
+navpage/
+
+# 密钥/环境
+.env
+*.pem
+
+# Python
+__pycache__/
+*.pyc
