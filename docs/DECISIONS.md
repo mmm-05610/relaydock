@@ -55,7 +55,7 @@
 
 ## 决策 5：LiteLLM 放远端服务器
 
-**结论**：LiteLLM 部署在 2核2G 云服务器（女朋友账号那台）上。
+**结论**：LiteLLM 部署在远端（服务器 B 应用层），不在本地。服务器 A 只跑数据库。
 
 **理由**：
 
@@ -79,15 +79,16 @@
 - ✅ _*Claude Code 接受非 claude-* 模型名_*：通过 LiteLLM 的 `model_name` 映射即可（如 `DeepSeek:deepseek-v4-pro(anthropic)`），无需 `claude-*` 别名。
 - ✅ **LiteLLM 数据库**：新版（1.96+）已移除 SQLite，必须用 PostgreSQL（虚拟 keys + spend tracking 依赖）。
 
-## 决策 7：数据库用 PostgreSQL
+## 决策 7：数据库用 PostgreSQL（放服务器 A）
 
-**结论**：LiteLLM 配 PostgreSQL（Docker 同机跑 `postgres:16-alpine`）。
+**结论**：LiteLLM 配 PostgreSQL（`postgres:16-alpine`），PG 独占服务器 A（数据层），LiteLLM 在 B 远程连。
 
 **理由**：
 
 - 新版 LiteLLM 已移除 SQLite，`database_url` 只认 `postgresql://`。
 - 虚拟 keys（给女朋友发 key、按 key 限额）+ spend tracking（消耗统计）都依赖 PG。
-- 个人自用单机 PG（约 250MB），2核2G 扛得住；不引入 RDS（贵且非必需）。
+- PG 独占 A（约 250MB），A 成为"纯数据节点"，只暴露 5432 给 B（安全组放行 B 的 IP）。
+- 跨服务器 DB 连接走同地域阿里云内网骨干（延迟 <1ms），对 LLM 网关可忽略；换来分层干净。
 
 ## 决策 8：模型命名三段式 + 双协议透传
 
@@ -108,12 +109,37 @@
 - LiteLLM 免费版的"按模型聚合报表"是企业功能（需 license），但数据接口 `/spend/logs` 免费可用。
 - 自建面板：FastAPI 后端代理（master key 不出浏览器）+ 自绘 SVG 图表，轻量适配 2核2G。
 
-## 决策 10：导航页 = 个人门户（第二台服务器）
+## 决策 10：第二台服务器（B）= 应用 + 展示 + 入口
 
-**结论**：第二台 2核2G（毛庆辉账号，可备案）跑导航页「猫猫王国」，女朋友那台做"数据节点"（LiteLLM + PG + 面板）。
+**结论**：第二台 2核2G（毛庆辉账号，可备案）= 服务器 B，跑应用层（LiteLLM）+ 展示层（面板 + 导航页）+ 入口层（Caddy）；女朋友那台 = 服务器 A，只跑数据层（PG）。
 
 **理由**：
 
 - 备案要求"备案主体名下有服务器"，服务器在女朋友账号无法备案（服务码授权要企业账号）。
 - 导航页定位"个人门户"：公开内容（博客/文档/简历）+ 私有服务（网关/面板），玻璃拟态风格。
-- 第二台跑 Caddy（HTTPS + 反代），女朋友那台端口收窄只对内。
+- B 是唯一公网入口，A 只暴露 5432 给 B，其他全藏。
+
+## 决策 11：三层架构 + 子路径反代
+
+**结论**：服务按「数据层 / 服务层 / 展示层 + 入口层」分层，B 用 Caddy 子路径反代（`/gateway`、`/panel`），只暴露 80/443。
+
+**分层**：
+
+- 数据层（A）：PostgreSQL，只被服务层访问
+- 服务层（B）：LiteLLM（连 A 的 PG）
+- 展示层（B）：消耗面板（连 litellm）+ 导航页
+- 入口层（B）：Caddy 反代，唯一公网入口
+
+**子路径反代**（不暴露 4000/8080）：
+
+| 路径         | 反代到                                 |
+| ------------ | -------------------------------------- |
+| `/gateway/*` | LiteLLM（`SERVER_ROOT_PATH=/gateway`） |
+| `/panel/*`   | 面板（caddy `handle_path` 剥前缀）     |
+| `/`          | 导航页                                 |
+
+**理由**：
+
+- 依赖单向不跨层：展示层 → 服务层 → 数据层。
+- 子路径反代让 B 只暴露 80/443，UI/面板/API 端口（4000/8080）不对外。
+- LiteLLM 用 `SERVER_ROOT_PATH` 支持子路径；面板用 caddy 剥前缀（面板是根路径）。
