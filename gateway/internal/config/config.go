@@ -18,6 +18,7 @@ type Channel struct {
 	Name        string  `yaml:"name" json:"name"`
 	BalanceType string  `yaml:"balance_type" json:"balance_type"` // balance(余额) | quota(余量百分比)
 	BalanceURL  string  `yaml:"balance_url" json:"balance_url"`
+	ModelsURL   string  `yaml:"models_url" json:"models_url"` // 拉取模型列表的接口
 	Enabled     bool    `yaml:"enabled" json:"enabled"`
 	Models      []Model `yaml:"models" json:"models"`
 }

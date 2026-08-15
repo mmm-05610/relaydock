@@ -77,6 +77,10 @@ func main() {
 			log.Printf("loaded %d channels from DB", len(channels))
 		} else {
 			for _, ch := range cfg.Channels {
+				ch.Enabled = true
+				for i := range ch.Models {
+					ch.Models[i].Enabled = true
+				}
 				if err := db.CreateChannel(ch); err != nil {
 					log.Printf("seed channel %s: %v", ch.Provider, err)
 				}
@@ -115,6 +119,7 @@ func main() {
 	mux.HandleFunc("POST /api/channels/{provider}/key", handleSetChannelKey)
 	mux.HandleFunc("POST /api/channels/{provider}/test", handleTestChannel)
 	mux.HandleFunc("GET /api/channels/{provider}/balance", handleChannelBalance)
+	mux.HandleFunc("GET /api/channels/{provider}/remote-models", handleRemoteModels)
 	mux.HandleFunc("POST /api/channels/{provider}/models", handleCreateModel)
 	mux.HandleFunc("PUT /api/channels/{provider}/models/{name}", handleUpdateModel)
 	mux.HandleFunc("DELETE /api/channels/{provider}/models/{name}", handleDeleteModel)
@@ -179,6 +184,20 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rec.Model = model
+
+	// 渠道/模型禁用检查
+	if !m.Enabled {
+		rec.Status = http.StatusNotFound
+		rec.Error = "model disabled"
+		http.Error(w, "model disabled", http.StatusNotFound)
+		return
+	}
+	if ch := cfg.FindChannel(m.Provider); ch != nil && !ch.Enabled {
+		rec.Status = http.StatusNotFound
+		rec.Error = "channel disabled"
+		http.Error(w, "channel disabled", http.StatusNotFound)
+		return
+	}
 
 	// key 的模型访问权限检查
 	if !authKey.CanAccessModel(model) {
@@ -535,10 +554,22 @@ func handleChannels(w http.ResponseWriter, r *http.Request) {
 			"balance_type":   ch.BalanceType,
 			"balance_url":    ch.BalanceURL,
 			"key_configured": upstreamKeys[ch.Provider] != "",
+			"key_prefix":     maskKey(upstreamKeys[ch.Provider]),
 			"models":         ch.Models,
 		})
 	}
 	writeJSON(w, out)
+}
+
+// maskKey 脱敏：只留前 8 位，其余用 * 掩盖。
+func maskKey(key string) string {
+	if key == "" {
+		return ""
+	}
+	if len(key) <= 8 {
+		return "****"
+	}
+	return key[:8] + "****"
 }
 
 // handleSetChannelKey 录入/更新渠道 API key（加密存 PG + 更新内存）。
@@ -662,6 +693,47 @@ func handleChannelBalance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, queryChannelBalance(*ch))
+}
+
+// handleRemoteModels 从上游拉取模型列表。
+func handleRemoteModels(w http.ResponseWriter, r *http.Request) {
+	if !requireAuth(w, r) {
+		return
+	}
+	provider := r.PathValue("provider")
+	ch := cfg.FindChannel(provider)
+	if ch == nil {
+		http.Error(w, "channel not found", http.StatusNotFound)
+		return
+	}
+	if ch.ModelsURL == "" {
+		writeJSON(w, map[string]any{"error": "未配置 models_url"})
+		return
+	}
+	key := upstreamKeys[provider]
+	if key == "" {
+		writeJSON(w, map[string]any{"error": "未配置 key"})
+		return
+	}
+	req, _ := http.NewRequest("GET", ch.ModelsURL, nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	var d struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&d)
+	var names []string
+	for _, m := range d.Data {
+		names = append(names, m.ID)
+	}
+	writeJSON(w, names)
 }
 
 // reloadChannels 从 PG 重新加载渠道到内存（热更新）。

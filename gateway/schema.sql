@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS channels (
   name         TEXT NOT NULL,
   balance_type TEXT NOT NULL DEFAULT 'balance',  -- balance(余额) | quota(余量百分比)
   balance_url  TEXT NOT NULL DEFAULT '',
+  models_url   TEXT NOT NULL DEFAULT '',
   enabled      BOOLEAN NOT NULL DEFAULT TRUE,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );

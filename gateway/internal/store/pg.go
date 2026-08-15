@@ -352,7 +352,7 @@ func (s *PgStore) QueryLogs(filter LogFilter) ([]UsageLog, error) {
 
 func (s *PgStore) LoadChannels() ([]config.Channel, error) {
 	ctx := context.Background()
-	rows, err := s.pool.Query(ctx, `SELECT id, provider, name, balance_type, balance_url, enabled FROM channels ORDER BY id`)
+	rows, err := s.pool.Query(ctx, `SELECT id, provider, name, balance_type, balance_url, models_url, enabled FROM channels ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -361,7 +361,7 @@ func (s *PgStore) LoadChannels() ([]config.Channel, error) {
 	for rows.Next() {
 		var ch config.Channel
 		var id int64
-		if err := rows.Scan(&id, &ch.Provider, &ch.Name, &ch.BalanceType, &ch.BalanceURL, &ch.Enabled); err != nil {
+		if err := rows.Scan(&id, &ch.Provider, &ch.Name, &ch.BalanceType, &ch.BalanceURL, &ch.ModelsURL, &ch.Enabled); err != nil {
 			return nil, err
 		}
 		models, err := s.loadModels(ctx, id, ch.Provider)
@@ -404,8 +404,8 @@ func (s *PgStore) CreateChannel(ch config.Channel) error {
 	}
 	defer tx.Rollback(ctx)
 	var id int64
-	if err := tx.QueryRow(ctx, `INSERT INTO channels (provider, name, balance_type, balance_url, enabled) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-		ch.Provider, ch.Name, ch.BalanceType, ch.BalanceURL, ch.Enabled).Scan(&id); err != nil {
+	if err := tx.QueryRow(ctx, `INSERT INTO channels (provider, name, balance_type, balance_url, models_url, enabled) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+		ch.Provider, ch.Name, ch.BalanceType, ch.BalanceURL, ch.ModelsURL, ch.Enabled).Scan(&id); err != nil {
 		return err
 	}
 	for _, m := range ch.Models {
@@ -419,8 +419,8 @@ func (s *PgStore) CreateChannel(ch config.Channel) error {
 }
 
 func (s *PgStore) UpdateChannel(ch config.Channel) error {
-	_, err := s.pool.Exec(context.Background(), `UPDATE channels SET name=$1, balance_type=$2, balance_url=$3, enabled=$4 WHERE provider=$5`,
-		ch.Name, ch.BalanceType, ch.BalanceURL, ch.Enabled, ch.Provider)
+	_, err := s.pool.Exec(context.Background(), `UPDATE channels SET name=$1, balance_type=$2, balance_url=$3, models_url=$4, enabled=$5 WHERE provider=$6`,
+		ch.Name, ch.BalanceType, ch.BalanceURL, ch.ModelsURL, ch.Enabled, ch.Provider)
 	return err
 }
 

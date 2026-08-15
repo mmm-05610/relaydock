@@ -5,6 +5,7 @@ channels:
     name: DeepSeek
     balance_type: balance # 余额型（显示金额）
     balance_url: https://api.deepseek.com/user/balance
+    models_url: https://api.deepseek.com/models
     models:
       - name: deepseek-v4-pro
         routes:
@@ -53,6 +54,7 @@ channels:
     name: MiniMax
     balance_type: quota # 余量型（显示百分比）
     balance_url: https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains
+    models_url: https://api.minimaxi.com/v1/models
     models:
       - name: minimax-m3
         routes:
