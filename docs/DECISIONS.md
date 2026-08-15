@@ -143,3 +143,32 @@
 - 依赖单向不跨层：展示层 → 服务层 → 数据层。
 - 子路径反代让 B 只暴露 80/443，UI/面板/API 端口（4000/8080）不对外。
 - LiteLLM 用 `SERVER_ROOT_PATH` 支持子路径；面板用 caddy 剥前缀（面板是根路径）。
+
+## 决策 12：放弃 LiteLLM，自建 Go 透传网关
+
+**结论**：放弃 LiteLLM（Python 版 + Rust 版都否掉），自建 **Go 单二进制透传网关**（纯透传零转换）+ 静态前端面板，替代 litellm + spend-dashboard + navpage 三个子服务。完整设计见 [architecture.md](architecture.md)。
+
+**理由**：
+
+- LiteLLM Python 版功能略重（~1.3GB 启动峰值），核心是**格式转换**（Anthropic↔OpenAI 有损，thinking/reasoning 丢）；光"用量统计"一个功能就是 3600 行代码喂给 100+ provider。
+- LiteLLM Rust 版早期 beta、无预构建镜像、responses 路由未覆盖、provider 硬编码无 deepseek/minimax。
+- 现成替代（otari / one-api / new-api）全是"转换型"网关，纯透传做不好（one-api 改 Content-Type、new-api 空 tools 注入）。
+- 真实需求就四条：**统一路由 + key 管理 + 用量统计 + 纯透传**，都轻。
+- 关键事实：Responses / Anthropic 响应**自带 `usage` 字段**，用量统计 = 读 usage × 价格表，无需 tokenizer（学 litellm 的归一化思路，但只需 ~100 行）。
+
+**核心设计**（详见 architecture.md）：
+
+- 协议无关透传：网关不认识协议，只做「认证 → 按 model 查 routes → 原样转发」；协议只是 config 里一条 route + 计量时一个 usage extractor。
+- key 全对称加密：上游 key AES-256-GCM 存 A 机 PG（master key 走 env）；虚拟 key 只存 SHA-256 哈希。
+- 计量：读上游 usage（anthropic 顶层 cache 字段 / responses `details.cached_tokens`）+ 字符估算 fallback + 缓存计价（read×0.1 / write×1.25）。
+
+**已验证结论**（curl 实测 2026-08-14）：
+
+| 供应商   | anthropic                | responses                    |
+| -------- | ------------------------ | ---------------------------- |
+| DeepSeek | `/anthropic/v1/messages` | `/responses`（根路径）       |
+| MiniMax  | `/anthropic/v1/messages` | `/v1/responses`（在 /v1 下） |
+
+- upstream model 名直接用 `deepseek-v4-pro` / `MiniMax-M3`，无需 `deepseek-chat` 映射。
+- usage 字段语义：anthropic `input_tokens` 不含缓存（顶层 cache 字段）；responses `input_tokens` 含缓存（`input_tokens_details.cached_tokens`）。
+- responses 流式终止事件有 `completed` 和 `incomplete` 两个（截断时是后者），extractor 都要认。

@@ -1,0 +1,77 @@
+# gateway 渠道配置（渠道 = 上游供应商 → 模型路由 + 价格）
+# upstream 存完整路径：不同供应商/协议路径结构不同（DeepSeek responses 在根路径，MiniMax 在 /v1 下）
+channels:
+  - provider: deepseek
+    name: DeepSeek
+    balance_type: balance # 余额型（显示金额）
+    balance_url: https://api.deepseek.com/user/balance
+    models:
+      - name: deepseek-v4-pro
+        routes:
+          "/v1/messages":
+            upstream: "https://api.deepseek.com/anthropic/v1/messages"
+            model: "deepseek-v4-pro"
+            usage: anthropic
+          "/v1/responses":
+            upstream: "https://api.deepseek.com/responses"
+            model: "deepseek-v4-pro"
+            usage: responses
+          "/v1/chat/completions":
+            upstream: "https://api.deepseek.com/v1/chat/completions"
+            model: "deepseek-v4-pro"
+            usage: chat_completions
+        pricing:
+          {
+            input_per_m: 3,
+            output_per_m: 6,
+            cache_read_per_m: 0.025,
+            cache_write_per_m: 3,
+          }
+      - name: deepseek-v4-flash
+        routes:
+          "/v1/messages":
+            upstream: "https://api.deepseek.com/anthropic/v1/messages"
+            model: "deepseek-v4-flash"
+            usage: anthropic
+          "/v1/responses":
+            upstream: "https://api.deepseek.com/responses"
+            model: "deepseek-v4-flash"
+            usage: responses
+          "/v1/chat/completions":
+            upstream: "https://api.deepseek.com/v1/chat/completions"
+            model: "deepseek-v4-flash"
+            usage: chat_completions
+        pricing:
+          {
+            input_per_m: 1,
+            output_per_m: 2,
+            cache_read_per_m: 0.02,
+            cache_write_per_m: 1,
+          }
+
+  - provider: minimax
+    name: MiniMax
+    balance_type: quota # 余量型（显示百分比）
+    balance_url: https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains
+    models:
+      - name: minimax-m3
+        routes:
+          "/v1/messages":
+            upstream: "https://api.minimaxi.com/anthropic/v1/messages"
+            model: "MiniMax-M3"
+            usage: anthropic
+          "/v1/responses":
+            upstream: "https://api.minimaxi.com/v1/responses"
+            model: "MiniMax-M3"
+            usage: responses
+          "/v1/chat/completions":
+            upstream: "https://api.minimaxi.com/v1/chat/completions"
+            model: "MiniMax-M3"
+            usage: chat_completions
+        pricing:
+          {
+            input_per_m: 2.1,
+            output_per_m: 8.4,
+            cache_read_per_m: 0.42,
+            cache_write_per_m: 2.625,
+          }
