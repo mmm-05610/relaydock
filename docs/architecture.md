@@ -102,9 +102,9 @@ internal/
 
 保留 A 机 PG，Go 网关内网连接。schema 见 §7。
 
-## 5. 协议路由（协议无关 + routes 列表）
+## 5. 协议路由（协议无关 + 渠道管理）
 
-**转发层协议无关**：网关不认识任何协议，只做「认证 → 按 model 查路由 → 原样转发」。协议这个概念只存在于两处：config 的路由条目、计量的 usage 提取器。
+**转发层协议无关**：网关不认识任何协议，只做「认证 → 按 model 查路由 → 原样转发」。协议这个概念只存在于两处：渠道的模型路由条目、计量的 usage 提取器。
 
 ```
 任意 /v1/* 路径 + body.model
@@ -113,85 +113,53 @@ internal/
 → 原样转发（换 base_url + 上游 key + 改 model 名）
 ```
 
-**加一个新协议 = 加一条 route + 一个 usage 提取器**，转发层一行不改。
+**渠道 = 上游供应商 → 模型（多协议路由 + 价格）**。配置存 **PG**（channels + models 表），面板增删改 + 热更新，config.yaml 退化为首次部署的种子数据。
 
-**config.yaml**（Go 启动时读，静态配置）：
+**config 结构**（渠道为中心）：
 
 ```yaml
-models:
-  - name: deepseek-v4-pro # 客户端 model 名
-    provider: deepseek
-    routes:
-      "/v1/messages":
-        {
-          upstream: "https://api.deepseek.com/anthropic/v1/messages",
-          model: "deepseek-v4-pro",
-          usage: anthropic,
-        }
-      "/v1/responses":
-        {
-          upstream: "https://api.deepseek.com/responses",
-          model: "deepseek-v4-pro",
-          usage: responses,
-        }
-      "/v1/chat/completions":
-        {
-          upstream: "https://api.deepseek.com/v1/chat/completions",
-          model: "deepseek-v4-pro",
-          usage: chat_completions,
-        }
-    pricing: { input_per_m: 0.435, output_per_m: 0.87 } # USD / 1M
-
-  - name: deepseek-v4-flash
-    provider: deepseek
-    routes:
-      "/v1/messages":
-        {
-          upstream: "https://api.deepseek.com/anthropic/v1/messages",
-          model: "deepseek-v4-flash",
-          usage: anthropic,
-        }
-      "/v1/responses":
-        {
-          upstream: "https://api.deepseek.com/responses",
-          model: "deepseek-v4-flash",
-          usage: responses,
-        }
-      "/v1/chat/completions":
-        {
-          upstream: "https://api.deepseek.com/v1/chat/completions",
-          model: "deepseek-v4-flash",
-          usage: chat_completions,
-        }
-    pricing: { input_per_m: 0.14, output_per_m: 0.28 }
-
-  - name: minimax-m3
-    provider: minimax
-    routes:
-      "/v1/messages":
-        {
-          upstream: "https://api.minimaxi.com/anthropic/v1/messages",
-          model: "MiniMax-M3",
-          usage: anthropic,
-        }
-      "/v1/responses":
-        {
-          upstream: "https://api.minimaxi.com/v1/responses",
-          model: "MiniMax-M3",
-          usage: responses,
-        }
-      "/v1/chat/completions":
-        {
-          upstream: "https://api.minimaxi.com/v1/chat/completions",
-          model: "MiniMax-M3",
-          usage: chat_completions,
-        }
-    pricing: { input_per_m: 0.30, output_per_m: 1.20 }
+channels:
+  - provider: deepseek # 渠道唯一标识
+    name: DeepSeek
+    balance_type: balance # 余额查询：balance(余额) | quota(余量百分比)
+    balance_url: https://api.deepseek.com/user/balance
+    models_url: https://api.deepseek.com/models # 拉取模型列表的接口
+    models: # 该渠道的模型
+      - name: deepseek-v4-pro # 客户端 model 名
+        routes: # 多协议路由（纯透传）
+          "/v1/messages":
+            {
+              upstream: "https://api.deepseek.com/anthropic/v1/messages",
+              model: "deepseek-v4-pro",
+              usage: anthropic,
+            }
+          "/v1/responses":
+            {
+              upstream: "https://api.deepseek.com/responses",
+              model: "deepseek-v4-pro",
+              usage: responses,
+            }
+          "/v1/chat/completions":
+            {
+              upstream: "https://api.deepseek.com/v1/chat/completions",
+              model: "deepseek-v4-pro",
+              usage: chat_completions,
+            }
+        pricing: {
+            input_per_m: 3,
+            output_per_m: 6,
+            cache_read_per_m: 0.025,
+            cache_write_per_m: 3,
+          } # 元/M
 ```
 
-`upstream` 存**完整路径**（不是 base + 拼接），因为不同供应商/协议路径结构不同（deepseek anthropic 是 `/anthropic/v1/messages`、responses 是 `/responses`），简单拼接拼不对。
+**关键设计**：
 
-**价格分层**：每模型单价（input/output per 1M）进 config；缓存计价倍数（read=0.1、write=1.25）写死代码常量（cc-switch 同款规则）。不做热更新、不自动同步价格（自用几个月才变一次，改 config + 重启即可）。
+- `upstream` 存完整路径（不拼接，各供应商路径结构不同）。
+- **一个模型多协议**：同客户端模型名配多条协议路由，纯透传无损。别的中转站靠格式转换（Anthropic↔OpenAI）实现多协议，转换有损（丢 thinking/reasoning）——这是自建网关的核心优势。
+- **价格用人民币（元/M）**：DeepSeek 官方价（pro 3/6、flash 1/2），MiniMax 官方五折价（M3 2.1/8.4）。
+- **缓存是独立单价**（cache_read_per_m / cache_write_per_m），不是写死倍数（DeepSeek 缓存读 0.025/0.02，不是输入的 10%）。
+- 加新供应商 = 渠道表加一行 + 前端 `PROVIDER_BASE`/`PROVIDER_PRICING` 映射加一条。
 
 ## 6. 核心流程
 
@@ -276,42 +244,76 @@ cost = input/1M × 输入价
 
 **边界**：流式中断（input 估算保底 + 打 unmetered）；上游 4xx/5xx（有 usage 就读，没有记 0）；计量/写库失败（只 log，不阻断）。
 
-## 7. 数据模型（PG schema）
+## 7. 数据模型（PG schema，5 张表）
 
 ```sql
+-- 渠道（上游供应商）
+CREATE TABLE channels (
+  id           BIGSERIAL PRIMARY KEY,
+  provider     TEXT UNIQUE NOT NULL,
+  name         TEXT NOT NULL,
+  balance_type TEXT NOT NULL DEFAULT 'balance',  -- balance(余额) | quota(余量百分比)
+  balance_url  TEXT NOT NULL DEFAULT '',
+  models_url   TEXT NOT NULL DEFAULT '',          -- 拉取模型列表的接口
+  enabled      BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 模型（客户端模型 → 多协议路由 + 价格），挂在渠道下
+CREATE TABLE models (
+  id                BIGSERIAL PRIMARY KEY,
+  channel_id        BIGINT REFERENCES channels(id) ON DELETE CASCADE,
+  name              TEXT NOT NULL,               -- 客户端模型名
+  routes            JSONB NOT NULL DEFAULT '{}', -- {"/v1/messages": {upstream,model,usage}, ...}
+  input_per_m       NUMERIC(12,6) NOT NULL DEFAULT 0,  -- 元/M
+  output_per_m      NUMERIC(12,6) NOT NULL DEFAULT 0,
+  cache_read_per_m  NUMERIC(12,6) NOT NULL DEFAULT 0,
+  cache_write_per_m NUMERIC(12,6) NOT NULL DEFAULT 0,
+  enabled           BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(channel_id, name)
+);
+
 -- 上游真 key：AES-256-GCM 密文，master key 解密
 CREATE TABLE upstream_keys (
   id              BIGSERIAL PRIMARY KEY,
-  provider        TEXT NOT NULL,          -- deepseek | minimax
+  provider        TEXT NOT NULL UNIQUE,
   encrypted_key   BYTEA NOT NULL,         -- nonce||ciphertext(GCM tag)
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- 虚拟 key（发给 agent）：只存 SHA-256 哈希
 CREATE TABLE keys (
-  id           BIGSERIAL PRIMARY KEY,
-  key_hash     TEXT UNIQUE NOT NULL,      -- SHA-256，不存明文
-  name         TEXT NOT NULL,             -- "claude-code" / "codex" / ...
-  agent_type   TEXT,
-  quota_limit  NUMERIC(12,6),             -- 额度（USD），NULL = 不限
-  quota_used   NUMERIC(12,6) NOT NULL DEFAULT 0,
-  enabled      BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  id             BIGSERIAL PRIMARY KEY,
+  key_hash       TEXT UNIQUE NOT NULL,      -- SHA-256，不存明文
+  name           TEXT NOT NULL,
+  owner          TEXT,                      -- 多用户归属
+  agent_type     TEXT,
+  quota_limit    NUMERIC(12,6),             -- 额度（元），NULL = 不限
+  quota_used     NUMERIC(12,6) NOT NULL DEFAULT 0,
+  enabled        BOOLEAN NOT NULL DEFAULT TRUE,
+  allowed_models TEXT NOT NULL DEFAULT '',  -- 允许访问的模型（逗号分隔，空=不限）
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- 用量日志
 CREATE TABLE usage_logs (
-  id               BIGSERIAL PRIMARY KEY,
-  key_id           BIGINT REFERENCES keys(id),
-  model            TEXT NOT NULL,
-  protocol         TEXT NOT NULL,         -- anthropic | responses
-  input_tokens     INTEGER,
-  output_tokens    INTEGER,
+  id                BIGSERIAL PRIMARY KEY,
+  key_id            BIGINT REFERENCES keys(id),
+  model             TEXT NOT NULL,
+  upstream_model    TEXT,
+  protocol          TEXT NOT NULL,         -- anthropic | responses | chat_completions
+  input_tokens      INTEGER,
+  output_tokens     INTEGER,
   cache_read_tokens  INTEGER,
   cache_write_tokens INTEGER,
-  cost             NUMERIC(12,6),
-  latency_ms       INTEGER,
-  unmetered        BOOLEAN NOT NULL DEFAULT FALSE,  -- 流式中断/估算标记
-  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+  cost              NUMERIC(12,6),         -- 元
+  latency_ms        INTEGER,
+  status            INTEGER,               -- HTTP 状态码（200/401/404/...）
+  error             TEXT,                  -- 失败原因（空=成功）
+  request_id        TEXT,                  -- 客户端请求 ID
+  unmetered         BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX ON usage_logs (key_id, created_at DESC);
 ```
