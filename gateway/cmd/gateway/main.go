@@ -174,9 +174,12 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 	rec := store.UsageLog{}
 	start := time.Now()
 	var authKey *keys.Key
+	loggable := false // 只有解析到真实模型路由的请求才落库（过滤 /v1/models、count_tokens 等噪声）
 	defer func() {
 		rec.LatencyMs = time.Since(start).Milliseconds()
-		recordUsage(rec, authKey)
+		if loggable {
+			recordUsage(rec, authKey)
+		}
 	}()
 
 	// 认证：Bearer 虚拟 key -> SHA-256 -> 查表 + 额度硬挡
@@ -246,6 +249,7 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	rec.UpstreamModel = route.Model
 	rec.Protocol = route.Usage
+	loggable = true // 真实模型请求，落库
 
 	key := upstreamKeys[m.Provider]
 	if key == "" {
