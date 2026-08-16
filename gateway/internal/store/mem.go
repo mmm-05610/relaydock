@@ -113,11 +113,11 @@ func (s *MemStore) GetDashboard() (DashboardStats, error) {
 	return DashboardStats{}, nil
 }
 
-func (s *MemStore) GetTimeseries(days int) ([]TimeseriesPoint, error) {
+func (s *MemStore) GetTimeseries(r TimeRange) ([]TimeseriesPoint, error) {
 	return nil, nil
 }
 
-func (s *MemStore) GetGrouped(by string) ([]GroupedUsage, error) {
+func (s *MemStore) GetGrouped(by string, r TimeRange) ([]GroupedUsage, error) {
 	return nil, nil
 }
 

@@ -216,9 +216,14 @@ func (s *PgStore) GetDashboard() (DashboardStats, error) {
 		`SELECT coalesce(sum(cost),0)::float8,
 		        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0),
 		        count(*),
-		        coalesce(avg(CASE WHEN status < 400 THEN 1.0 ELSE 0.0 END),0)
+		        coalesce(avg(CASE WHEN status < 400 THEN 1.0 ELSE 0.0 END),0),
+		        coalesce(avg(latency_ms),0)::float8,
+		        coalesce(sum(cache_read_tokens),0),
+		        CASE WHEN coalesce(sum(input_tokens),0)+coalesce(sum(cache_read_tokens),0) > 0
+		             THEN coalesce(sum(cache_read_tokens),0)::float8 / (coalesce(sum(input_tokens),0)+coalesce(sum(cache_read_tokens),0))
+		             ELSE 0 END
 		 FROM usage_logs WHERE created_at >= current_date`).
-		Scan(&st.TodayCost, &st.TodayTokens, &st.TodayRequests, &st.SuccessRate)
+		Scan(&st.TodayCost, &st.TodayTokens, &st.TodayRequests, &st.SuccessRate, &st.AvgLatencyMs, &st.CacheReadTokens, &st.CacheHitRate)
 	if err != nil {
 		return st, err
 	}
@@ -226,26 +231,35 @@ func (s *PgStore) GetDashboard() (DashboardStats, error) {
 	return st, err
 }
 
-// GetTimeseries 按天聚合（趋势图）。
-func (s *PgStore) GetTimeseries(days int) ([]TimeseriesPoint, error) {
-	ctx := context.Background()
-	if days <= 0 {
-		days = 7
+// timeFilter 返回时间过滤的 WHERE 片段与参数（col 需含表别名前缀，如 "u.created_at"）。
+func timeFilter(col string, r TimeRange) (string, []any) {
+	if r.From != "" && r.To != "" {
+		return fmt.Sprintf(" AND %s >= $1::date AND %s < ($2::date + 1)", col, col), []any{r.From, r.To}
 	}
+	if r.Days > 0 {
+		return fmt.Sprintf(" AND %s >= current_date - ($1::int - 1)", col), []any{r.Days}
+	}
+	return "", nil
+}
+
+// GetTimeseries 按天聚合（趋势图）。
+func (s *PgStore) GetTimeseries(r TimeRange) ([]TimeseriesPoint, error) {
+	ctx := context.Background()
+	filter, fargs := timeFilter("created_at", r)
 	rows, err := s.pool.Query(ctx,
 		`SELECT to_char(date_trunc('day', created_at), 'MM-DD'),
 		        coalesce(sum(cost),0)::float8,
 		        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0),
 		        count(*)
 		 FROM usage_logs
-		 WHERE created_at >= current_date - ($1::int - 1)
+		 WHERE 1=1`+filter+`
 		 GROUP BY date_trunc('day', created_at)
-		 ORDER BY date_trunc('day', created_at)`, days)
+		 ORDER BY date_trunc('day', created_at)`, fargs...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []TimeseriesPoint
+	out := []TimeseriesPoint{}
 	for rows.Next() {
 		var p TimeseriesPoint
 		if err := rows.Scan(&p.Date, &p.Cost, &p.Tokens, &p.Requests); err != nil {
@@ -257,42 +271,56 @@ func (s *PgStore) GetTimeseries(days int) ([]TimeseriesPoint, error) {
 }
 
 // GetGrouped 按维度聚合（model/key/owner/protocol）。
-func (s *PgStore) GetGrouped(by string) ([]GroupedUsage, error) {
+func (s *PgStore) GetGrouped(by string, r TimeRange) ([]GroupedUsage, error) {
 	ctx := context.Background()
 	var sql string
+	var filter string
+	var fargs []any
 	switch by {
 	case "protocol":
 		sql = `SELECT coalesce(protocol,''), coalesce(sum(cost),0)::float8, coalesce(sum(input_tokens),0), coalesce(sum(output_tokens),0),
 		        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0), count(*),
-		        coalesce(avg(CASE WHEN status < 400 THEN 1.0 ELSE 0.0 END),0)
-		 FROM usage_logs WHERE protocol <> '' GROUP BY protocol ORDER BY sum(cost) DESC`
+		        coalesce(avg(CASE WHEN status < 400 THEN 1.0 ELSE 0.0 END),0),
+		        coalesce(sum(cache_read_tokens),0), coalesce(avg(latency_ms),0)::float8
+		 FROM usage_logs WHERE protocol <> ''`
+		filter, fargs = timeFilter("created_at", r)
+		sql += filter + ` GROUP BY protocol ORDER BY sum(cost) DESC`
 	case "key":
 		sql = `SELECT coalesce(k.name,'(未知)'), coalesce(sum(u.cost),0)::float8, coalesce(sum(u.input_tokens),0), coalesce(sum(u.output_tokens),0),
 		        coalesce(sum(u.input_tokens),0)+coalesce(sum(u.output_tokens),0), count(*),
-		        coalesce(avg(CASE WHEN u.status < 400 THEN 1.0 ELSE 0.0 END),0)
+		        coalesce(avg(CASE WHEN u.status < 400 THEN 1.0 ELSE 0.0 END),0),
+		        coalesce(sum(u.cache_read_tokens),0), coalesce(avg(u.latency_ms),0)::float8
 		 FROM usage_logs u LEFT JOIN keys k ON u.key_id = k.id
-		 WHERE u.key_id IS NOT NULL GROUP BY k.name ORDER BY sum(u.cost) DESC`
+		 WHERE u.key_id IS NOT NULL`
+		filter, fargs = timeFilter("u.created_at", r)
+		sql += filter + ` GROUP BY k.name ORDER BY sum(u.cost) DESC`
 	case "owner":
 		sql = `SELECT coalesce(k.owner,'(未归属)'), coalesce(sum(u.cost),0)::float8, coalesce(sum(u.input_tokens),0), coalesce(sum(u.output_tokens),0),
 		        coalesce(sum(u.input_tokens),0)+coalesce(sum(u.output_tokens),0), count(*),
-		        coalesce(avg(CASE WHEN u.status < 400 THEN 1.0 ELSE 0.0 END),0)
+		        coalesce(avg(CASE WHEN u.status < 400 THEN 1.0 ELSE 0.0 END),0),
+		        coalesce(sum(u.cache_read_tokens),0), coalesce(avg(u.latency_ms),0)::float8
 		 FROM usage_logs u LEFT JOIN keys k ON u.key_id = k.id
-		 WHERE u.key_id IS NOT NULL GROUP BY k.owner ORDER BY sum(u.cost) DESC`
+		 WHERE u.key_id IS NOT NULL`
+		filter, fargs = timeFilter("u.created_at", r)
+		sql += filter + ` GROUP BY k.owner ORDER BY sum(u.cost) DESC`
 	default: // model
 		sql = `SELECT coalesce(model,''), coalesce(sum(cost),0)::float8, coalesce(sum(input_tokens),0), coalesce(sum(output_tokens),0),
 		        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0), count(*),
-		        coalesce(avg(CASE WHEN status < 400 THEN 1.0 ELSE 0.0 END),0)
-		 FROM usage_logs WHERE model <> '' GROUP BY model ORDER BY sum(cost) DESC`
+		        coalesce(avg(CASE WHEN status < 400 THEN 1.0 ELSE 0.0 END),0),
+		        coalesce(sum(cache_read_tokens),0), coalesce(avg(latency_ms),0)::float8
+		 FROM usage_logs WHERE model <> ''`
+		filter, fargs = timeFilter("created_at", r)
+		sql += filter + ` GROUP BY model ORDER BY sum(cost) DESC`
 	}
-	rows, err := s.pool.Query(ctx, sql)
+	rows, err := s.pool.Query(ctx, sql, fargs...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []GroupedUsage
+	out := []GroupedUsage{}
 	for rows.Next() {
 		var g GroupedUsage
-		if err := rows.Scan(&g.Group, &g.Cost, &g.InputTokens, &g.OutputTokens, &g.Tokens, &g.Requests, &g.SuccessRate); err != nil {
+		if err := rows.Scan(&g.Group, &g.Cost, &g.InputTokens, &g.OutputTokens, &g.Tokens, &g.Requests, &g.SuccessRate, &g.CacheReadTokens, &g.AvgLatencyMs); err != nil {
 			return nil, err
 		}
 		out = append(out, g)
@@ -303,7 +331,7 @@ func (s *PgStore) GetGrouped(by string) ([]GroupedUsage, error) {
 // QueryLogs 请求日志查询（筛选 + 分页）。
 func (s *PgStore) QueryLogs(filter LogFilter) ([]UsageLog, error) {
 	ctx := context.Background()
-	query := `SELECT id, key_id, coalesce(model,''), coalesce(upstream_model,''), coalesce(protocol,''),
+	query := `SELECT id, coalesce(key_id,0), coalesce(model,''), coalesce(upstream_model,''), coalesce(protocol,''),
 	          coalesce(input_tokens,0), coalesce(output_tokens,0), coalesce(cache_read_tokens,0), coalesce(cache_write_tokens,0),
 	          coalesce(cost,0)::float8, coalesce(latency_ms,0), coalesce(status,0), coalesce(error,''), coalesce(request_id,''), coalesce(unmetered,false), created_at
 	          FROM usage_logs WHERE 1=1`

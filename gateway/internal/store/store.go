@@ -48,9 +48,16 @@ type UsageStore interface {
 	InsertUsageLog(log UsageLog) error
 	GetUsageStats() (UsageStats, error)
 	GetDashboard() (DashboardStats, error)
-	GetTimeseries(days int) ([]TimeseriesPoint, error)
-	GetGrouped(by string) ([]GroupedUsage, error)
+	GetTimeseries(r TimeRange) ([]TimeseriesPoint, error)
+	GetGrouped(by string, r TimeRange) ([]GroupedUsage, error)
 	QueryLogs(filter LogFilter) ([]UsageLog, error)
+}
+
+// TimeRange 用量查询的时间范围（三种方式取一）。
+type TimeRange struct {
+	Days int    // >0：最近 N 天（相对 PG current_date，含今天）
+	From string // 自定义起止（YYYY-MM-DD，含），与 To 配对
+	To   string // 自定义结束（YYYY-MM-DD，含）
 }
 
 // LogFilter 日志查询筛选。
@@ -94,11 +101,14 @@ type KeyUsage struct {
 
 // DashboardStats 概览聚合。
 type DashboardStats struct {
-	TodayCost     float64
-	TodayTokens   int64
-	TodayRequests int64
-	SuccessRate   float64
-	RecentLogs    []UsageLog
+	TodayCost       float64
+	TodayTokens     int64
+	TodayRequests   int64
+	SuccessRate     float64
+	AvgLatencyMs    float64
+	CacheReadTokens int64
+	CacheHitRate    float64 // 缓存命中率 = cache_read / (input + cache_read)
+	RecentLogs      []UsageLog
 }
 
 // TimeseriesPoint 按天聚合点。
@@ -111,11 +121,13 @@ type TimeseriesPoint struct {
 
 // GroupedUsage 按维度聚合。
 type GroupedUsage struct {
-	Group        string
-	Cost         float64
-	InputTokens  int64
-	OutputTokens int64
-	Tokens       int64
-	Requests     int64
-	SuccessRate  float64
+	Group           string
+	Cost            float64
+	InputTokens     int64
+	OutputTokens    int64
+	Tokens          int64
+	Requests        int64
+	SuccessRate     float64
+	CacheReadTokens int64
+	AvgLatencyMs    float64
 }

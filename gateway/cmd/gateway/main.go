@@ -466,21 +466,28 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, st)
 }
 
+func parseTimeRange(r *http.Request) store.TimeRange {
+	var tr store.TimeRange
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			tr.Days = n
+		}
+	}
+	tr.From = r.URL.Query().Get("from")
+	tr.To = r.URL.Query().Get("to")
+	return tr
+}
+
 func handleTimeseries(w http.ResponseWriter, r *http.Request) {
 	if !requireAuth(w, r) {
 		return
 	}
-	days := 7
-	if v := r.URL.Query().Get("days"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			days = n
-		}
-	}
+	tr := parseTimeRange(r)
 	if db == nil {
 		writeJSON(w, []store.TimeseriesPoint{})
 		return
 	}
-	pts, err := db.GetTimeseries(days)
+	pts, err := db.GetTimeseries(tr)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -500,7 +507,7 @@ func handleGrouped(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, []store.GroupedUsage{})
 		return
 	}
-	g, err := db.GetGrouped(by)
+	g, err := db.GetGrouped(by, parseTimeRange(r))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
