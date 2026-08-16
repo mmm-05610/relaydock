@@ -155,7 +155,7 @@ func (s *PgStore) GetUsageStats() (UsageStats, error) {
 	// 汇总
 	err := s.pool.QueryRow(ctx,
 		`SELECT coalesce(sum(cost),0)::float8,
-		        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0),
+		        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0)+coalesce(sum(cache_read_tokens),0)+coalesce(sum(cache_write_tokens),0),
 		        count(*)
 		 FROM usage_logs`).Scan(&st.TotalCost, &st.TotalTokens, &st.TotalRequests)
 	if err != nil {
@@ -165,7 +165,7 @@ func (s *PgStore) GetUsageStats() (UsageStats, error) {
 	// 按模型
 	rows, err := s.pool.Query(ctx,
 		`SELECT model, coalesce(sum(cost),0)::float8, coalesce(sum(input_tokens),0), coalesce(sum(output_tokens),0),
-		        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0), count(*),
+		        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0)+coalesce(sum(cache_read_tokens),0)+coalesce(sum(cache_write_tokens),0), count(*),
 		        coalesce(avg(CASE WHEN status < 400 THEN 1.0 ELSE 0.0 END),0)
 		 FROM usage_logs WHERE model <> '' GROUP BY model ORDER BY sum(cost) DESC`)
 	if err != nil {
@@ -186,7 +186,7 @@ func (s *PgStore) GetUsageStats() (UsageStats, error) {
 	// 按 key
 	rows2, err := s.pool.Query(ctx,
 		`SELECT u.key_id, coalesce(k.name,''), coalesce(k.owner,''), coalesce(sum(u.cost),0)::float8,
-		        coalesce(sum(u.input_tokens),0)+coalesce(sum(u.output_tokens),0), count(*)
+		        coalesce(sum(u.input_tokens),0)+coalesce(sum(u.output_tokens),0)+coalesce(sum(u.cache_read_tokens),0)+coalesce(sum(u.cache_write_tokens),0), count(*)
 		 FROM usage_logs u LEFT JOIN keys k ON u.key_id = k.id
 		 WHERE u.key_id IS NOT NULL
 		 GROUP BY u.key_id, k.name, k.owner ORDER BY sum(u.cost) DESC`)
@@ -214,7 +214,7 @@ func (s *PgStore) GetDashboard() (DashboardStats, error) {
 	var st DashboardStats
 	err := s.pool.QueryRow(ctx,
 		`SELECT coalesce(sum(cost),0)::float8,
-		        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0),
+		        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0)+coalesce(sum(cache_read_tokens),0)+coalesce(sum(cache_write_tokens),0),
 		        count(*),
 		        coalesce(avg(CASE WHEN status < 400 THEN 1.0 ELSE 0.0 END),0),
 		        coalesce(avg(latency_ms),0)::float8,
@@ -249,7 +249,7 @@ func (s *PgStore) GetTimeseries(r TimeRange) ([]TimeseriesPoint, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT to_char(date_trunc('day', created_at), 'MM-DD'),
 		        coalesce(sum(cost),0)::float8,
-		        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0),
+		        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0)+coalesce(sum(cache_read_tokens),0)+coalesce(sum(cache_write_tokens),0),
 		        count(*)
 		 FROM usage_logs
 		 WHERE 1=1`+filter+`
@@ -279,7 +279,7 @@ func (s *PgStore) GetGrouped(by string, r TimeRange) ([]GroupedUsage, error) {
 	switch by {
 	case "protocol":
 		sql = `SELECT coalesce(protocol,''), coalesce(sum(cost),0)::float8, coalesce(sum(input_tokens),0), coalesce(sum(output_tokens),0),
-		        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0), count(*),
+		        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0)+coalesce(sum(cache_read_tokens),0)+coalesce(sum(cache_write_tokens),0), count(*),
 		        coalesce(avg(CASE WHEN status < 400 THEN 1.0 ELSE 0.0 END),0),
 		        coalesce(sum(cache_read_tokens),0), coalesce(avg(latency_ms),0)::float8
 		 FROM usage_logs WHERE protocol <> ''`
@@ -287,7 +287,7 @@ func (s *PgStore) GetGrouped(by string, r TimeRange) ([]GroupedUsage, error) {
 		sql += filter + ` GROUP BY protocol ORDER BY sum(cost) DESC`
 	case "key":
 		sql = `SELECT coalesce(k.name,'(未知)'), coalesce(sum(u.cost),0)::float8, coalesce(sum(u.input_tokens),0), coalesce(sum(u.output_tokens),0),
-		        coalesce(sum(u.input_tokens),0)+coalesce(sum(u.output_tokens),0), count(*),
+		        coalesce(sum(u.input_tokens),0)+coalesce(sum(u.output_tokens),0)+coalesce(sum(u.cache_read_tokens),0)+coalesce(sum(u.cache_write_tokens),0), count(*),
 		        coalesce(avg(CASE WHEN u.status < 400 THEN 1.0 ELSE 0.0 END),0),
 		        coalesce(sum(u.cache_read_tokens),0), coalesce(avg(u.latency_ms),0)::float8
 		 FROM usage_logs u LEFT JOIN keys k ON u.key_id = k.id
@@ -296,7 +296,7 @@ func (s *PgStore) GetGrouped(by string, r TimeRange) ([]GroupedUsage, error) {
 		sql += filter + ` GROUP BY k.name ORDER BY sum(u.cost) DESC`
 	case "owner":
 		sql = `SELECT coalesce(k.owner,'(未归属)'), coalesce(sum(u.cost),0)::float8, coalesce(sum(u.input_tokens),0), coalesce(sum(u.output_tokens),0),
-		        coalesce(sum(u.input_tokens),0)+coalesce(sum(u.output_tokens),0), count(*),
+		        coalesce(sum(u.input_tokens),0)+coalesce(sum(u.output_tokens),0)+coalesce(sum(u.cache_read_tokens),0)+coalesce(sum(u.cache_write_tokens),0), count(*),
 		        coalesce(avg(CASE WHEN u.status < 400 THEN 1.0 ELSE 0.0 END),0),
 		        coalesce(sum(u.cache_read_tokens),0), coalesce(avg(u.latency_ms),0)::float8
 		 FROM usage_logs u LEFT JOIN keys k ON u.key_id = k.id
@@ -305,7 +305,7 @@ func (s *PgStore) GetGrouped(by string, r TimeRange) ([]GroupedUsage, error) {
 		sql += filter + ` GROUP BY k.owner ORDER BY sum(u.cost) DESC`
 	default: // model
 		sql = `SELECT coalesce(model,''), coalesce(sum(cost),0)::float8, coalesce(sum(input_tokens),0), coalesce(sum(output_tokens),0),
-		        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0), count(*),
+		        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0)+coalesce(sum(cache_read_tokens),0)+coalesce(sum(cache_write_tokens),0), count(*),
 		        coalesce(avg(CASE WHEN status < 400 THEN 1.0 ELSE 0.0 END),0),
 		        coalesce(sum(cache_read_tokens),0), coalesce(avg(latency_ms),0)::float8
 		 FROM usage_logs WHERE model <> ''`
