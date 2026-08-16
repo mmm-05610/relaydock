@@ -99,7 +99,8 @@ func main() {
 	meter = metering.NewMeter()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/", handleProxy) // 所有 /v1/* 透传
+	mux.HandleFunc("GET /v1/models", handleModels) // 模型列表（OpenAI 兼容）
+	mux.HandleFunc("/v1/", handleProxy)             // 所有 /v1/* 透传
 	mux.HandleFunc("GET /api/keys", handleListKeys)
 	mux.HandleFunc("POST /api/keys", handleCreateKey)
 	mux.HandleFunc("POST /api/keys/revoke", handleRevokeKey)
@@ -137,6 +138,35 @@ func main() {
 	addr := ":8080"
 	log.Printf("gateway listening on %s", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
+}
+
+// handleModels 返回可用模型列表（OpenAI 兼容格式，认证后按 key 权限过滤）。
+func handleModels(w http.ResponseWriter, r *http.Request) {
+	authKey, err := keyMgr.Authenticate(bearerToken(r))
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	now := time.Now().Unix()
+	type modelItem struct {
+		ID      string `json:"id"`
+		Object  string `json:"object"`
+		Created int64  `json:"created"`
+		OwnedBy string `json:"owned_by"`
+	}
+	data := []modelItem{}
+	for _, ch := range cfg.Channels {
+		if !ch.Enabled {
+			continue
+		}
+		for _, m := range ch.Models {
+			if !m.Enabled || !authKey.CanAccessModel(m.Name) {
+				continue
+			}
+			data = append(data, modelItem{ID: m.Name, Object: "model", Created: now, OwnedBy: m.Provider})
+		}
+	}
+	writeJSON(w, map[string]any{"object": "list", "data": data})
 }
 
 // handleProxy 协议无关透传：认证 -> 路由 -> 换上游 -> 原样转发。成功失败都落库。
