@@ -8,3 +8,6 @@ navpage/
 # Python
 __pycache__/
 *.pyc
+
+# Windows 重定向误产物（> nul）
+nul
