@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS channels (
   balance_url  TEXT NOT NULL DEFAULT '',
   models_url   TEXT NOT NULL DEFAULT '',
   enabled      BOOLEAN NOT NULL DEFAULT TRUE,
+  preset       JSONB NOT NULL DEFAULT '{}',     -- {endpoints:{proto:url}, pricing:{model:{...}}}
+  auth_mode    TEXT NOT NULL DEFAULT 'bearer',  -- 上游认证 header：bearer(默认) | x_api_key
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

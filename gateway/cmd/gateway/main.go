@@ -271,7 +271,12 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "build upstream", http.StatusInternalServerError)
 		return
 	}
-	upReq.Header.Set("Authorization", "Bearer "+key)
+	applyUpstreamAuth(upReq, cfg.FindChannel(m.Provider), key)
+	// 透传客户端已有的协议 header（如 anthropic-version），缺失才补默认
+	if v := r.Header.Get("anthropic-version"); v != "" {
+		upReq.Header.Set("anthropic-version", v)
+	}
+	applyProtocolHeaders(upReq, route.Usage)
 	upReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(upReq)
@@ -594,8 +599,11 @@ func handleChannels(w http.ResponseWriter, r *http.Request) {
 			"name":           ch.Name,
 			"balance_type":   ch.BalanceType,
 			"balance_url":    ch.BalanceURL,
+			"models_url":     ch.ModelsURL,
+			"auth_mode":      ch.AuthMode,
 			"key_configured": upstreamKeys[ch.Provider] != "",
 			"key_prefix":     maskKey(upstreamKeys[ch.Provider]),
+			"preset":         ch.Preset,
 			"models":         ch.Models,
 		})
 	}
@@ -650,7 +658,9 @@ func handleSetChannelKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
-// handleTestChannel 测试渠道连通性。传 model 则测模型真实调用，否则测 balance_url。
+// handleTestChannel 测试渠道连通性。
+//   - 带 model: 测该模型真实调用
+//   - 不带 model: 测该渠道第一个 enabled 模型的真实调用（订阅制套餐没 balance_url 也可用）
 func handleTestChannel(w http.ResponseWriter, r *http.Request) {
 	if !requireAuth(w, r) {
 		return
@@ -671,31 +681,61 @@ func handleTestChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	// 测模型真实调用（发最小请求）
+	// 选定被测模型：只从当前渠道里找（避免 cfg.FindModel 全局查撞名，误用别的渠道的模型配置）
+	var target *config.Model
 	if req.Model != "" {
-		if m := cfg.FindModel(req.Model); m != nil {
-			writeJSON(w, testModelCall(*m, key))
+		for i := range ch.Models {
+			if ch.Models[i].Name == req.Model {
+				target = &ch.Models[i]
+				break
+			}
+		}
+		if target == nil {
+			writeJSON(w, map[string]any{"ok": false, "error": "model not found"})
 			return
 		}
-		writeJSON(w, map[string]any{"ok": false, "error": "model not found"})
-		return
+	} else {
+		for i := range ch.Models {
+			if ch.Models[i].Enabled {
+				target = &ch.Models[i]
+				break
+			}
+		}
+		if target == nil {
+			writeJSON(w, map[string]any{"ok": false, "error": "渠道无 enabled 模型"})
+			return
+		}
 	}
-
-	// 测 balance_url 连通性
-	start := time.Now()
-	breq, _ := http.NewRequest("GET", ch.BalanceURL, nil)
-	breq.Header.Set("Authorization", "Bearer "+key)
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(breq)
-	latency := time.Since(start).Milliseconds()
-	if err != nil {
-		writeJSON(w, map[string]any{"ok": false, "error": err.Error(), "latency_ms": latency})
-		return
-	}
-	defer resp.Body.Close()
-	writeJSON(w, map[string]any{"ok": resp.StatusCode == 200, "status": resp.StatusCode, "latency_ms": latency})
+	writeJSON(w, testModelCall(*target, key))
 }
 
-// testModelCall 发最小请求测试模型可调用性（优先 anthropic 路由）。
+// applyUpstreamAuth 按渠道的 auth_mode 给上游请求设置认证 header。
+// bearer(默认) -> Authorization: Bearer；x_api_key -> x-api-key。
+// 透传（handleProxy）与测试（testModelCall）共用，保证「测通 = 能用」。
+func applyUpstreamAuth(req *http.Request, ch *config.Channel, key string) {
+	mode := ""
+	if ch != nil {
+		mode = ch.AuthMode
+	}
+	if mode == "x_api_key" {
+		req.Header.Set("x-api-key", key)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+}
+
+// applyProtocolHeaders 按路由协议补必需的协议 header（透传/测试共用）。
+// anthropic 协议缺 anthropic-version 会 401（opencode.ai 实测），cc-switch 也是缺失时补默认值。
+func applyProtocolHeaders(req *http.Request, usage string) {
+	if usage == "anthropic" {
+		if req.Header.Get("anthropic-version") == "" {
+			req.Header.Set("anthropic-version", "2023-06-01")
+		}
+	}
+}
+
+// testModelCall 发最小请求测试模型可调用性。
+// 优先 /v1/messages（anthropic 协议）；fallback 到任意一条路由（按对应协议的 body 格式）。
 func testModelCall(m config.Model, key string) map[string]any {
 	route, ok := m.Routes["/v1/messages"]
 	if !ok {
@@ -708,9 +748,19 @@ func testModelCall(m config.Model, key string) map[string]any {
 	if !ok {
 		return map[string]any{"ok": false, "error": "无路由"}
 	}
-	body := fmt.Sprintf(`{"model":%q,"max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`, route.Model)
+	// 按协议选最小 body 格式
+	var body string
+	switch route.Usage {
+	case "responses":
+		body = fmt.Sprintf(`{"model":%q,"input":"hi","max_output_tokens":1}`, route.Model)
+	case "chat_completions":
+		body = fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"max_completion_tokens":1}`, route.Model)
+	default: // anthropic
+		body = fmt.Sprintf(`{"model":%q,"max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`, route.Model)
+	}
 	req, _ := http.NewRequest("POST", route.Upstream, strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+key)
+	applyUpstreamAuth(req, cfg.FindChannel(m.Provider), key)
+	applyProtocolHeaders(req, route.Usage)
 	req.Header.Set("Content-Type", "application/json")
 	start := time.Now()
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)

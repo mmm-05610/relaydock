@@ -20,6 +20,8 @@ type Channel struct {
 	BalanceURL  string  `yaml:"balance_url" json:"balance_url"`
 	ModelsURL   string  `yaml:"models_url" json:"models_url"` // 拉取模型列表的接口
 	Enabled     bool    `yaml:"enabled" json:"enabled"`
+	AuthMode    string  `yaml:"auth_mode" json:"auth_mode"` // 上游认证 header：bearer(默认) | x_api_key
+	Preset      Preset  `yaml:"preset" json:"preset"`       // 协议端点 + 价格预设（面板可视化）
 	Models      []Model `yaml:"models" json:"models"`
 }
 
@@ -65,11 +67,16 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// FindModel 遍历所有渠道，按客户端 model 名查配置。
+// FindModel 按客户端 model 名查配置，只认启用的渠道 + 启用的模型。
+// 同名模型允许存在多个渠道，但客户端请求只路由到「启用渠道中第一个匹配」的那个——
+// 即通过启停渠道来控制「花哪家的钱」，客户端无感知。
 func (c *Config) FindModel(name string) *Model {
 	for i := range c.Channels {
+		if !c.Channels[i].Enabled {
+			continue
+		}
 		for j := range c.Channels[i].Models {
-			if c.Channels[i].Models[j].Name == name {
+			if c.Channels[i].Models[j].Enabled && c.Channels[i].Models[j].Name == name {
 				return &c.Channels[i].Models[j]
 			}
 		}
