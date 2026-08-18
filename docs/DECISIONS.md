@@ -1,15 +1,35 @@
 # 架构决策记录（ADR）
 
 > 本文档记录这个项目的核心决策及其理由。每次架构决策变更，先改这里。
+> 当前架构：**自建 Go 透传网关**（替代 LiteLLM），见决策 12。
 
 ## 背景
 
-- 两台 **2核2G** 云服务器（阿里云）：① 女朋友账号跑 LiteLLM 数据节点，② 毛庆辉账号跑导航页（可备案）
+- 两台 **2核2G** 云服务器（阿里云）：① 女朋友账号跑 PostgreSQL 数据节点（115.29.241.36），② 毛庆辉账号跑应用 + 入口（121.40.184.111，可备案）
 - 已有 **DeepSeek API**（充值额度）+ **MiniMax Coding Plan 订阅**（量大管饱）
 - 日常用多个 coding agent（agent-box 管理 claude / codex / opencode / hermes）
 - 目标：把两家额度高效用起来，一个统一入口（猫猫王国），按角色/场景分配模型
 
-## 决策 1：用 LiteLLM 做网关，不用 one-api / new-api
+---
+
+## 决策演进（时间线）
+
+```
+决策 1–11（LiteLLM 时代）              ← 已废弃，仅作历史背景
+  └─ LiteLLM Python + 8 条三段式命名 + 自建面板 + 子路径反代
+
+决策 12（当前）：自建 Go 网关            ← 当前架构
+  └─ 单二进制 + 纯透传 + PG 渠道表 + 静态面板 + Caddy 入口
+```
+
+---
+
+## 决策 1–11（LiteLLM 时代，已废弃）
+
+> **状态：已废**。决策 12 用自建 Go 网关替代了 LiteLLM。下文保留作为历史参考。
+> 当前实际架构、组件、端口、命令等见决策 12 与 [architecture.md](architecture.md) / [setup.md](setup.md)。
+
+### 决策 1（已废）：用 LiteLLM 做网关，不用 one-api / new-api
 
 **结论**：LiteLLM（自托管，MIT）。
 
@@ -21,7 +41,7 @@
 
 **代价**：LiteLLM 无华丽面板（有基础 Dashboard + spend tracking），需要自管 Docker + 可选 Postgres。个人自用够。
 
-## 决策 2：不做语义路由
+### 决策 2（仍有效）：不做语义路由
 
 **结论**：不搞"路由器看懂请求自动选模型"。
 
@@ -31,7 +51,7 @@
 - 只有 2 家厂商，自动选模型的收益≈0，反而引入不确定层。
 - 需要该能力时看 AISIX/Higress（Rust/Envoy，语义路由），当前阶段明确不做。
 
-## 决策 3：不用 claude-code-router
+### 决策 3（仍有效）：不用 claude-code-router
 
 **结论**：不引入。
 
@@ -39,9 +59,9 @@
 
 - claude-code-router 的核心价值是按请求类型自动分类（background/think/longContext/webSearch）。
 - 它**只服务 Claude Code**——而我们还有 OpenCode / Codex / hermes，一个只服务单客户端的路由器覆盖不了。
-- 我们需要的"后台杂活 → MiniMax"可以用 **Claude Code 自带的 `ANTHROPIC_SMALL_FAST_MODEL`** 实现，不需要额外工具。
+- 我们需要的"后台杂活 → MiniMax"可以用 **Claude Code 自带的 `ANTHROPIC_DEFAULT_HAIKU_MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL`** 实现，不需要额外工具。
 
-## 决策 4：主对话整段留在主模型（DeepSeek），不按长度切
+### 决策 4（仍有效）：主对话整段留在主模型（DeepSeek），不按长度切
 
 **结论**：主对话（任何长度）→ DeepSeek；后台杂活 → MiniMax。
 
@@ -53,122 +73,95 @@
   - **主对话**（要连贯、要角色）→ DeepSeek，整段
   - **后台杂活**（摘要/命名/子任务，不需要连贯）→ MiniMax
 
-## 决策 5：LiteLLM 放远端服务器
+### 决策 5–11（已废，LiteLLM 部署相关）
 
-**结论**：LiteLLM 部署在远端（服务器 B 应用层），不在本地。服务器 A 只跑数据库。
+略，详见 git 历史。关键事实：LiteLLM 已被 Go 网关全面替代，不再维护。
 
-**理由**：
+---
 
-- 稳定常驻、一个入口、多设备/多 agent 共用。
-- 两家 key 集中在服务器一处，不在各机器上散落。
-- 服务器在国内（腾讯/阿里），DeepSeek/MiniMax 也是国内 API，就近无延迟问题。
-- 本地只做"角色分配"（Claude Code 配置），灵活、轻。
-
-## 决策 6：MiniMax 利用率
-
-**结论**：后台杂活默认喂 MiniMax；若仍吃不满，可手动把探索/调研类会话整体切到 MiniMax。
-
-**理由**：
-
-- "后台杂活≈60% token"是 claude-code-router 的统计数据，Claude Code 自带 small-fast 的实际覆盖量需实测。
-- 若 MiniMax 利用率仍低，按会话粒度手动切（探索/调研 → MiniMax）同样是既定分工，不破坏主对话连贯性。
-
-## 已验证结论（原待验证项，均已落地）
-
-- ✅ **MiniMax 模型**：`MiniMax-M3`、`MiniMax-M2.7-highspeed`（Coding Plan 订阅）。base_url = `https://api.minimaxi.com`（国内端点；OpenAI 协议走 `/v1`，Anthropic 协议走 `/anthropic`）。不是旧文档猜的 `MiniMax-Text-01`。
-- ✅ _*Claude Code 接受非 claude-* 模型名_*：通过 LiteLLM 的 `model_name` 映射即可（如 `DeepSeek:deepseek-v4-pro(anthropic)`），无需 `claude-*` 别名。
-- ✅ **LiteLLM 数据库**：新版（1.96+）已移除 SQLite，必须用 PostgreSQL（虚拟 keys + spend tracking 依赖）。
-
-## 决策 7：数据库用 PostgreSQL（放服务器 A）
-
-**结论**：LiteLLM 配 PostgreSQL（`postgres:16-alpine`），PG 独占服务器 A（数据层），LiteLLM 在 B 远程连。
-
-**理由**：
-
-- 新版 LiteLLM 已移除 SQLite，`database_url` 只认 `postgresql://`。
-- 虚拟 keys（给女朋友发 key、按 key 限额）+ spend tracking（消耗统计）都依赖 PG。
-- PG 独占 A（约 250MB），A 成为"纯数据节点"，只暴露 5432 给 B（安全组放行 B 的 IP）。
-- 跨服务器 DB 连接走同地域阿里云内网骨干（延迟 <1ms），对 LLM 网关可忽略；换来分层干净。
-
-## 决策 8：模型命名三段式 + 双协议透传
-
-**结论**：model_name 采用 `供应商:模型名(协议)` 格式（如 `DeepSeek:deepseek-v4-pro(anthropic)`），每个模型 × 每种协议端点 = 一条独立配置，当前共 8 条。
-
-**理由**：
-
-- LiteLLM 的 Anthropic↔OpenAI 协议转换**并非无损**（thinking/reasoning_content 会丢，推理模型多轮对话断裂）。
-- 因此不依赖转换，改用**透传**：客户端用什么协议，就配同协议的上游端点，模型名后缀 `(anthropic)`/`(openai)` 区分。
-- 一个 model_name 只能对应一个端点，多协议就多名字；三段式命名让归属/模型/协议一眼可辨。
-
-## 决策 9：消耗统计面板自建
-
-**结论**：自建轻量 FastAPI 面板（`litellm-spend-dashboard`），替代 LiteLLM 企业版报表。
-
-**理由**：
-
-- LiteLLM 免费版的"按模型聚合报表"是企业功能（需 license），但数据接口 `/spend/logs` 免费可用。
-- 自建面板：FastAPI 后端代理（master key 不出浏览器）+ 自绘 SVG 图表，轻量适配 2核2G。
-
-## 决策 10：第二台服务器（B）= 应用 + 展示 + 入口
-
-**结论**：第二台 2核2G（毛庆辉账号，可备案）= 服务器 B，跑应用层（LiteLLM）+ 展示层（面板 + 导航页）+ 入口层（Caddy）；女朋友那台 = 服务器 A，只跑数据层（PG）。
-
-**理由**：
-
-- 备案要求"备案主体名下有服务器"，服务器在女朋友账号无法备案（服务码授权要企业账号）。
-- 导航页定位"个人门户"：公开内容（博客/文档/简历）+ 私有服务（网关/面板），玻璃拟态风格。
-- B 是唯一公网入口，A 只暴露 5432 给 B，其他全藏。
-
-## 决策 11：三层架构 + 子路径反代
-
-**结论**：服务按「数据层 / 服务层 / 展示层 + 入口层」分层，B 用 Caddy 子路径反代（`/gateway`、`/panel`），只暴露 80/443。
-
-**分层**：
-
-- 数据层（A）：PostgreSQL，只被服务层访问
-- 服务层（B）：LiteLLM（连 A 的 PG）
-- 展示层（B）：消耗面板（连 litellm）+ 导航页
-- 入口层（B）：Caddy 反代，唯一公网入口
-
-**子路径反代**（不暴露 4000/8080）：
-
-| 路径         | 反代到                                 |
-| ------------ | -------------------------------------- |
-| `/gateway/*` | LiteLLM（`SERVER_ROOT_PATH=/gateway`） |
-| `/panel/*`   | 面板（caddy `handle_path` 剥前缀）     |
-| `/`          | 导航页                                 |
-
-**理由**：
-
-- 依赖单向不跨层：展示层 → 服务层 → 数据层。
-- 子路径反代让 B 只暴露 80/443，UI/面板/API 端口（4000/8080）不对外。
-- LiteLLM 用 `SERVER_ROOT_PATH` 支持子路径；面板用 caddy 剥前缀（面板是根路径）。
-
-## 决策 12：放弃 LiteLLM，自建 Go 透传网关
+## 决策 12：自建 Go 透传网关（替代 LiteLLM）★ 当前架构
 
 **结论**：放弃 LiteLLM（Python 版 + Rust 版都否掉），自建 **Go 单二进制透传网关**（纯透传零转换）+ 静态前端面板，替代 litellm + spend-dashboard + navpage 三个子服务。完整设计见 [architecture.md](architecture.md)。
 
-**理由**：
+### 12.1 LiteLLM 三条路都走不通
 
-- LiteLLM Python 版功能略重（~1.3GB 启动峰值），核心是**格式转换**（Anthropic↔OpenAI 有损，thinking/reasoning 丢）；光"用量统计"一个功能就是 3600 行代码喂给 100+ provider。
-- LiteLLM Rust 版早期 beta、无预构建镜像、responses 路由未覆盖、provider 硬编码无 deepseek/minimax。
-- 现成替代（otari / one-api / new-api）全是"转换型"网关，纯透传做不好（one-api 改 Content-Type、new-api 空 tools 注入）。
-- 真实需求就四条：**统一路由 + key 管理 + 用量统计 + 纯透传**，都轻。
-- 关键事实：Responses / Anthropic 响应**自带 `usage` 字段**，用量统计 = 读 usage × 价格表，无需 tokenizer（学 litellm 的归一化思路，但只需 ~100 行）。
+| 路径                         | 问题                                                                                                |
+| ---------------------------- | --------------------------------------------------------------------------------------------------- |
+| LiteLLM Python 版            | 功能略重（~1.3GB 启动峰值），核心是**格式转换**，Anthropic↔OpenAI 转换有损（thinking/reasoning 丢） |
+| LiteLLM Rust 版              | 早期 beta、无预构建镜像、responses 路由未覆盖、provider 硬编码无 deepseek/minimax                   |
+| 现成替代（otari/one-api 等） | 全是"转换型"网关，纯透传做不好（one-api 改 Content-Type、new-api 空 tools 注入）                    |
 
-**核心设计**（详见 architecture.md）：
+### 12.2 真实需求只有四条，都很轻
 
-- 协议无关透传：网关不认识协议，只做「认证 → 按 model 查 routes → 原样转发」；协议只是 config 里一条 route + 计量时一个 usage extractor。
-- key 全对称加密：上游 key AES-256-GCM 存 A 机 PG（master key 走 env）；虚拟 key 只存 SHA-256 哈希。
-- 计量：读上游 usage（anthropic 顶层 cache 字段 / responses `details.cached_tokens`）+ 字符估算 fallback + 缓存计价（read×0.1 / write×1.25）。
+**统一路由 + key 管理 + 用量统计 + 纯透传**。
 
-**已验证结论**（curl 实测 2026-08-14）：
+关键事实：OpenAI Responses 和 Anthropic Messages 响应**自带 `usage` 字段**，用量统计不需要 tokenizer。参考实现：litellm 用量统计 ~3600 行代码 + 4.6 万行价格表（喂给 100+ provider），我们的核心只需 ~100 行。
+
+### 12.3 核心设计
+
+- **协议无关透传**：网关不认识协议，只做「认证 → 按 model 查 routes → 原样转发」；协议只存在于两处：渠道的模型路由条目、计量的 usage 提取器（anthropic / responses / chat_completions）。
+- **渠道在 PG 中管理**：channels 表 + models 表存「渠道 → 模型 → 多协议路由 + 价格」，面板增删改 + 热更新（`reloadChannels()`），`gateway/config.yaml` 退化为首次部署的种子数据。
+- **key 全对称加密**：上游 key AES-256-GCM 存 A 机 PG（master key 走 `GATEWAY_MASTER_KEY` env）；虚拟 key 只存 SHA-256 哈希。
+- **计量旁路**：读上游 usage（anthropic 顶层 cache 字段 / responses `details.cached_tokens` / chat `prompt_tokens`）+ 字符估算 fallback（`metering/fallback.go`，pre-call 兜底）+ 缓存计价（每模型独立单价，不是写死倍数）。
+- **单二进制零依赖**：Go 编译成 ~10MB 二进制（B 机 `gateway/bin/gateway`），systemd `gateway.service` 跑前台，B 机的 Caddy 反代 /v1/* 和 /api/* 到 `:8080`。
+- **静态面板由 gateway 直接 serve**：`mux.Handle("/", http.FileServer(http.Dir(staticDir)))`（默认 `../navpage`），Caddy 只做 TLS + 反代入口。
+- **管理 API 认证 = PANEL_PASSWORD**（Bearer 对称口令，env 注入），不是 master key。
+
+### 12.4 已验证结论（curl 实测 2026-08-14）
 
 | 供应商   | anthropic                | responses                    |
 | -------- | ------------------------ | ---------------------------- |
 | DeepSeek | `/anthropic/v1/messages` | `/responses`（根路径）       |
 | MiniMax  | `/anthropic/v1/messages` | `/v1/responses`（在 /v1 下） |
 
-- upstream model 名直接用 `deepseek-v4-pro` / `MiniMax-M3`，无需 `deepseek-chat` 映射。
+- upstream model 名直接用 `deepseek-v4-pro` / `MiniMax-M3`（config 里 model 段写啥就发啥）。
 - usage 字段语义：anthropic `input_tokens` 不含缓存（顶层 cache 字段）；responses `input_tokens` 含缓存（`input_tokens_details.cached_tokens`）。
 - responses 流式终止事件有 `completed` 和 `incomplete` 两个（截断时是后者），extractor 都要认。
+- 客户端 model 名是「直白」的（如 `deepseek-v4-pro`），不再用 LiteLLM 时代的 `供应商:模型名(协议)` 三段式——协议由 URL path 决定，模型表里 `routes` 字典按 path 索引。
+
+---
+
+## 决策 13：双服务器分层（数据层 / 服务层 / 入口层）
+
+**结论**：
+
+- A 机（115.29.241.36，女朋友账号）= 纯数据节点，只跑 PostgreSQL（独立库 `gateway`）。
+- B 机（121.40.184.111，毛庆辉账号，可备案）= 服务层（Go 网关 binary + systemd）+ 入口层（Caddy，TLS + 反代 + 静态）。
+
+**理由**：
+
+- 备案要求"备案主体名下有服务器"，服务器在女朋友账号无法备案（服务码授权要企业账号）。
+- A 机安全组只放行 5432 给 B 机；B 机只暴露 80/443 给公网；客户端不再用 4000（LiteLLM 时代）端口，统一 `http://121.40.184.111`（Caddy）。
+- Go 网关是单二进制，无 Docker 依赖，systemd 跑前台；Caddy 跑入口反代，二者都轻量，能在 2核2G 上稳定常驻。
+
+---
+
+## 决策 14：客户端 model 名直白，协议由 URL path 决定
+
+**结论**：客户端请求 body 里 `model` 用直白名字（如 `deepseek-v4-pro`、`minimax-m3`、`deepseek-v4-flash`），协议由请求路径（`/v1/messages` / `/v1/responses` / `/v1/chat/completions`）决定。
+
+**理由**：
+
+- LiteLLM 时代用三段式（`供应商:模型名(协议)`）是因为 LiteLLM 内部按 `model_name` 路由，需要把协议信息编码进名字。自建网关不需要。
+- 网关 `m.FindRoute(clientPath)` 按 URL path 查 `routes` 字典，命中后取 `upstream` + `upstream_model` + `usage_protocol`。同一个客户端模型名可以在多个协议下透传。
+- 简化客户端配置：Claude Code 设 `ANTHROPIC_DEFAULT_MODEL=deepseek-v4-pro` 即可，不用再为不同协议开多个变量。
+
+---
+
+## 决策 15：上游 key 优先从 PG 读，env 作为回退
+
+**结论**：启动时先查 PG（`upstream_keys` 表 AES 密文），没有则回退到环境变量（`DEEPSEEK_API_KEY` / `MINIMAX_API_KEY`）。
+
+**理由**：
+
+- PG 录入是默认路径（管理 API `POST /api/channels/{provider}/key` 或 CLI `gateway keys set-upstream --provider <name>`），安全（加密落库）。
+- 环境变量作为开发期/紧急情况的回退，方便本地 `go run` 调试（不需要 PG 也能跑起来，bootstrap key 自动生成）。
+- 切换两套方式不需要改代码，重启 gateway 生效。
+
+---
+
+## 待验证项
+
+- 渠道表热更新：当前是 `reloadChannels()` 全量替换，大渠道下需要确认并发安全（读路径无锁，但模型列表变更期间可能有请求路由到旧配置）。
+- 流式中断时的 input 估算精度：`EstimateInputTokens(body)` 用字符/3 估算，正负 10–20%，已作为 unmetered fallback。
+- `[1m]` 后缀（Claude Code 声明上下文）：网关侧目前未剥后缀，依赖 Claude Code 客户端自己处理；待验证上游是否接受。
