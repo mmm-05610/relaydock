@@ -1,35 +1,48 @@
-# litellm-router — 个人 LLM 集中路由
+# 云端模型路由（原 litellm-router）
 
-把 **DeepSeek（主决策）** 和 **MiniMax（后台量大管饱）** 两家 API 聚合成一个统一入口，
-供 Claude Code / OpenCode / Codex 等所有 agent 使用。
+个人 LLM 集中路由：**自建 Go 透传网关**，把 **DeepSeek（主决策）** 和 **MiniMax（后台量大管饱）**
+聚合成一个统一入口，供 Claude Code / Codex / OpenCode 等所有 agent 使用，
+并自带透明计量（用量面板）、渠道/模型管理、virtual key 权限。
+
+> 曾用 LiteLLM 做网关，因 2G 服务器装不动 + 想完全掌控路由/计量，改为自建 Go 网关（`gateway/`）。
 
 ## 架构（一句话）
 
 ```
 你的机器（本地角色分配）
   Claude Code
-    ANTHROPIC_DEFAULT_MODEL   = deepseek-chat   → 主对话（整段，保持连贯）→ DeepSeek
-    ANTHROPIC_SMALL_FAST_MODEL = minimax-small  → 后台杂活（摘要/子任务） → MiniMax
-  OpenCode / Codex（各自配 model name）                ↓ 都指向
-                                           ┌──────────────┐
-远端服务器（2核4G）                          │   LiteLLM    │
-                                           │ DeepSeek key │
-                                           │ MiniMax key  │
-                                           └──────────────┘
+    ANTHROPIC_MODEL = deepseek-v4-pro     → 主对话（整段，保持连贯）→ DeepSeek
+    ANTHROPIC_DEFAULT_HAIKU_MODEL = MiniMax-M3 → 后台杂活 → MiniMax
+  Codex / OpenCode（各自配 model + base_url）   ↓ 都指向
+                                       ┌──────────────────────────┐
+展示服务器 121.40.184.111（Caddy 入口）│  自建 Go 网关（gateway）  │
+  /v1/* → gateway :8080               │  路由 + 计量 + key 权限   │
+  /panel → 用量面板                   └──────────┬───────────────┘
+                                                ↓ 计量数据
+存储服务器 115.29.241.36（PostgreSQL，5 表：usage_logs/keys/channels/models/upstream_keys）
 ```
 
 ## 关键决策
 
-- **用 LiteLLM**，不用 one-api / new-api（那些是"中转站"——给别人卖 API 计费的，不是个人路由）
-- **不用语义路由**（"看懂请求自动选模型"不可靠，2 家厂商纯属过度设计）
-- **不用 claude-code-router**（只服务 Claude Code，且你要的是"主对话连贯"而非按长度切模型）
-- **主对话整段留在 DeepSeek**（不按上下文长度切——切了会破坏连贯性）
-- **后台杂活走 MiniMax**（利用其量大管饱，消化 Claude Code 后台任务/子代理）
+- **自建 Go 网关，不用 LiteLLM**（替代了，LiteLLM 在 2G 装不动 + 想掌控路由/计量）
+- **不用 one-api / new-api**（中转站=计费分发，非自用路由）
+- **主对话整段留 DeepSeek**（不按上下文长度切——切了破坏连贯性）
+- **后台杂活走 MiniMax**（利用其量大管饱，消化后台任务/子代理）
+- **透明计量**：自建 usage_logs + 用量面板，每条请求记录 model/token/cost
 
 详见 [docs/DECISIONS.md](docs/DECISIONS.md)。
 
 ## 快速开始
 
-1. 服务器上部署 LiteLLM：见 [docs/setup.md](docs/setup.md)
-2. 客户端接入（Claude Code / OpenCode）：见 [docs/clients.md](docs/clients.md)
-3. 验证：`curl http://<服务器>:4000/v1/models`
+1. 部署网关 + 面板：见 [docs/setup.md](docs/setup.md)
+2. 客户端接入（Claude Code / Codex / OpenCode）：见 [docs/clients.md](docs/clients.md)
+3. 验证：`curl http://121.40.184.111/v1/models -H "Authorization: Bearer <你的 virtual key>"`
+4. 看用量：`http://121.40.184.111/panel`
+
+## 文档
+
+- [DECISIONS.md](docs/DECISIONS.md) — 架构决策
+- [architecture.md](docs/architecture.md) — 系统架构
+- [setup.md](docs/setup.md) — 部署
+- [clients.md](docs/clients.md) — 客户端接入
+- [panel-design.md](docs/panel-design.md) — 用量面板设计
