@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"gateway/internal/config"
 	"gateway/internal/pool"
@@ -30,6 +31,18 @@ func (g *Gateway) proxyWithAccounts(w http.ResponseWriter, r *http.Request, snap
 	if g.captureEnabled() {
 		sink.enabled = true
 	}
+	sessionKey := sessionKeyOf(originalBody, r.Header)
+	var prefer *pool.AccountRef
+	if sessionKey != "" {
+		if a := g.Pool.Affinity(sessionKey, time.Now()); a != nil {
+			for _, r := range refs {
+				if r.Spec.ID == a.Spec.ID {
+					prefer = r // 粘性目标已不在候选集（被删/禁用）时保持 nil，走常规选择
+					break
+				}
+			}
+		}
+	}
 
 	// 最近一个「可切换」错误响应，尚未转发给客户端
 	var pending *http.Response
@@ -43,7 +56,7 @@ func (g *Gateway) proxyWithAccounts(w http.ResponseWriter, r *http.Request, snap
 	defer closePending()
 
 	for {
-		lease, err := g.Pool.Acquire(refs, tried)
+		lease, err := g.Pool.Acquire(refs, tried, prefer)
 		if err != nil {
 			if pending != nil {
 				// 没有下一个账号：透传最近的上游错误响应
@@ -121,6 +134,11 @@ func (g *Gateway) proxyWithAccounts(w http.ResponseWriter, r *http.Request, snap
 			g.relayUpstream(w, resp, m, route, upstreamBody(originalBody, route, clientModel), sink, rec)
 			resp.Body.Close()
 			lease.Release()
+			if v.Class == pool.ClassOK {
+				g.Pool.BindAffinity(sessionKey, ref, time.Now())
+			} else {
+				g.Pool.BindAffinity(sessionKey, nil, time.Now()) // 失败解除粘性
+			}
 			if rec.RequestID != "" {
 				g.storeRequestBodyAsync(rec.RequestID, rec.Model, originalBody, sink, rec.Status)
 			}
@@ -158,4 +176,20 @@ func writeGatewayError(w http.ResponseWriter, rec *store.UsageLog, status int, m
 func drainAndClose(resp *http.Response) {
 	_, _ = io.CopyN(io.Discard, resp.Body, 8<<10)
 	_ = resp.Body.Close()
+}
+
+
+// sessionKeyOf 会话粘性键：优先 body.prompt_cache_key（Codex），
+// 其次 session-id 头；都没有则不做粘性（返回空）。
+func sessionKeyOf(body []byte, header http.Header) string {
+	var m struct {
+		PromptCacheKey string `json:"prompt_cache_key"`
+	}
+	if err := json.Unmarshal(body, &m); err == nil && m.PromptCacheKey != "" {
+		return "pc:" + m.PromptCacheKey
+	}
+	if sid := header.Get("session-id"); sid != "" {
+		return "sid:" + sid
+	}
+	return ""
 }

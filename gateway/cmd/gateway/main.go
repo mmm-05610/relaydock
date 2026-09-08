@@ -35,13 +35,15 @@ func main() {
 	}
 	log.Printf("loaded %d channels", len(cfg.Channels))
 
-	// 存储：有 DATABASE_URL 用 PG；否则内存（本地开发，管理面功能完整可用）
+	// 存储三态：DATABASE_URL=PG；默认 SQLite（零依赖持久化）；MEMORY=1 内存（重启清零）
 	var db *store.PgStore
 	var dbBacking gateway.Backing
 	var keyMgr *keys.Manager
+	useMemory := os.Getenv("MEMORY") == "1"
 	ctx := context.Background()
-	if dbURL := os.Getenv("DATABASE_URL"); dbURL != "" {
-		pg, err := store.NewPgStore(ctx, dbURL)
+	switch {
+	case os.Getenv("DATABASE_URL") != "":
+		pg, err := store.NewPgStore(ctx, os.Getenv("DATABASE_URL"))
 		if err != nil {
 			log.Fatalf("connect pg: %v", err)
 		}
@@ -49,14 +51,27 @@ func main() {
 		dbBacking = pg
 		keyMgr = keys.NewManager(pg)
 		log.Printf("using PostgreSQL store")
-	} else {
+	case !useMemory:
+		sqlitePath := os.Getenv("SQLITE_PATH")
+		if sqlitePath == "" {
+			sqlitePath = "data/relaydock.db"
+		}
+		sq, err := store.NewSqliteStore(sqlitePath)
+		if err != nil {
+			log.Fatalf("open sqlite: %v", err)
+		}
+		defer sq.Close()
+		dbBacking = sq
+		keyMgr = keys.NewManager(sq)
+		log.Printf("using SQLite store: %s", sqlitePath)
+	default:
 		mem := store.NewMemStore()
 		dbBacking = mem
 		keyMgr = keys.NewManager(mem)
 		if raw, err := keyMgr.CreateKey("bootstrap", "", "", 0); err == nil {
 			log.Printf("bootstrap key (仅此一次可见): %s", raw)
 		}
-		log.Printf("using in-memory store (no DATABASE_URL, 管理面全功能)")
+		log.Printf("using in-memory store (MEMORY=1, 重启清零，管理面全功能)")
 	}
 
 	// 渠道从存储加载（空则从 config.yaml 种子导入，PG/内存一致）
@@ -87,7 +102,7 @@ func main() {
 	panelPassword := os.Getenv("PANEL_PASSWORD")
 	// 内存模式未设 master key 时生成一次性密钥：凭据加解密在会话内可用，
 	// 重启随内存清零（凭据本就不持久），本地开发开箱即用
-	if db == nil && os.Getenv("GATEWAY_MASTER_KEY") == "" {
+	if useMemory && os.Getenv("GATEWAY_MASTER_KEY") == "" {
 		b := make([]byte, 32)
 		if _, err := rand.Read(b); err != nil {
 			log.Fatalf("generate ephemeral master key: %v", err)

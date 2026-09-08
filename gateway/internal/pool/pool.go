@@ -25,10 +25,23 @@ type Pool struct {
 	rejections atomic.Int64 // 本地容量拒绝次数
 	cooldowns  atomic.Int64 // 上游触发的冷却次数
 	failovers  atomic.Int64 // 换账号重试次数
+	stickyHits atomic.Int64 // 会话粘性命中次数
+
+	affinity map[string]affinityEntry // 会话键 -> 账号（KV 缓存亲和）
+}
+
+const (
+	// AffinityTTL 会话亲和保持时长：覆盖一个 coding 会话的典型时长。
+	AffinityTTL = time.Hour
+)
+
+type affinityEntry struct {
+	ref      *AccountRef
+	lastSeen time.Time
 }
 
 func New() *Pool {
-	return &Pool{states: map[int64]*AccountState{}, nowFn: time.Now}
+	return &Pool{states: map[int64]*AccountState{}, nowFn: time.Now, affinity: map[string]affinityEntry{}}
 }
 
 // SetNow 替换时钟（测试用）。
@@ -64,7 +77,7 @@ func (p *Pool) Reconcile(specs []*AccountSpec) []*AccountRef {
 // exclude 是本请求已尝试过的账号。排序只决定尝试顺序：
 // 按占用比例（inflight/max_concurrency，无限并发用 inflight）从低到高，
 // 同分块按进程内游标轮转；最终容量判定由 tryAcquire 在锁内原子完成。
-func (p *Pool) Acquire(refs []*AccountRef, exclude map[int64]bool) (*Lease, error) {
+func (p *Pool) Acquire(refs []*AccountRef, exclude map[int64]bool, prefer *AccountRef) (*Lease, error) {
 	type cand struct {
 		ref   *AccountRef
 		score float64
@@ -106,6 +119,14 @@ func (p *Pool) Acquire(refs []*AccountRef, exclude map[int64]bool) (*Lease, erro
 		}
 	}
 
+	// 会话粘性：优先尝试上次服务的账号（吃上游 prompt cache）。
+	// tryAcquire 内含冷却/禁用/容量校验，不健康则自然落回常规选择。
+	if prefer != nil && !exclude[prefer.Spec.ID] {
+		if prefer.State.tryAcquire(prefer.Spec, now) {
+			p.stickyHits.Add(1)
+			return &Lease{ref: prefer}, nil
+		}
+	}
 	for _, c := range cands {
 		if c.ref.State.tryAcquire(c.ref.Spec, now) {
 			return &Lease{ref: c.ref}, nil
@@ -113,6 +134,36 @@ func (p *Pool) Acquire(refs []*AccountRef, exclude map[int64]bool) (*Lease, erro
 	}
 	p.rejections.Add(1)
 	return nil, ErrAtCapacity
+}
+
+// Affinity 取会话绑定的账号（TTL 过期或不存在返回 nil）。
+func (p *Pool) Affinity(sessionKey string, now time.Time) *AccountRef {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.affinity[sessionKey]
+	if !ok {
+		return nil
+	}
+	if now.Sub(e.lastSeen) > AffinityTTL {
+		delete(p.affinity, sessionKey)
+		return nil
+	}
+	return e.ref
+}
+
+// BindAffinity 会话成功结束后绑定账号，顺带清理过期条目。
+func (p *Pool) BindAffinity(sessionKey string, ref *AccountRef, now time.Time) {
+	if sessionKey == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for k, e := range p.affinity {
+		if now.Sub(e.lastSeen) > AffinityTTL {
+			delete(p.affinity, k)
+		}
+	}
+	p.affinity[sessionKey] = affinityEntry{ref: ref, lastSeen: now}
 }
 
 // Cool 对账号施加冷却并计数。
@@ -132,8 +183,9 @@ type Counters struct {
 	Rejections int64 `json:"capacity_rejections"`
 	Cooldowns  int64 `json:"cooldowns"`
 	Failovers  int64 `json:"failovers"`
+	StickyHits int64 `json:"sticky_hits"`
 }
 
 func (p *Pool) Counters() Counters {
-	return Counters{Rejections: p.rejections.Load(), Cooldowns: p.cooldowns.Load(), Failovers: p.failovers.Load()}
+	return Counters{Rejections: p.rejections.Load(), Cooldowns: p.cooldowns.Load(), Failovers: p.failovers.Load(), StickyHits: p.stickyHits.Load()}
 }

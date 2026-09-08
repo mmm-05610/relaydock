@@ -27,10 +27,11 @@ func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().Unix()
 	type modelItem struct {
-		ID      string `json:"id"`
-		Object  string `json:"object"`
-		Created int64  `json:"created"`
-		OwnedBy string `json:"owned_by"`
+		ID            string `json:"id"`
+		Object        string `json:"object"`
+		Created       int64  `json:"created"`
+		OwnedBy       string `json:"owned_by"`
+		ContextLength int    `json:"context_length,omitempty"`
 	}
 	data := []modelItem{}
 	for _, ch := range snap.Config.Channels {
@@ -41,7 +42,7 @@ func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 			if !m.Enabled || !authKey.CanAccessModel(m.Name) {
 				continue
 			}
-			data = append(data, modelItem{ID: m.Name, Object: "model", Created: now, OwnedBy: m.Provider})
+			data = append(data, modelItem{ID: m.Name, Object: "model", Created: now, OwnedBy: m.Provider, ContextLength: m.ContextLength})
 		}
 	}
 	writeJSON(w, map[string]any{"object": "list", "data": data})

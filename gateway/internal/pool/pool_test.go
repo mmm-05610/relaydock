@@ -29,7 +29,7 @@ func TestConcurrentAcquireRespectsLimit(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			lease, err := p.Acquire([]*AccountRef{a}, nil)
+			lease, err := p.Acquire([]*AccountRef{a}, nil, nil)
 			if err != nil {
 				return // 满槽被拒是合法结果
 			}
@@ -55,7 +55,7 @@ func TestConcurrentAcquireRespectsLimit(t *testing.T) {
 func TestLeaseReleaseIdempotent(t *testing.T) {
 	p := New()
 	a := ref(t, p, 1, 2, true)
-	lease, err := p.Acquire([]*AccountRef{a}, nil)
+	lease, err := p.Acquire([]*AccountRef{a}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,12 +77,12 @@ func TestAcquireSkipsCoolingAndReturnsAfterExpiry(t *testing.T) {
 	a := ref(t, p, 1, 0, true)
 	p.Cool(a, 30*time.Second, "test")
 
-	if _, err := p.Acquire([]*AccountRef{a}, nil); err == nil {
+	if _, err := p.Acquire([]*AccountRef{a}, nil, nil); err == nil {
 		t.Fatal("cooling account should not be acquirable")
 	}
 
 	clock = base.Add(31 * time.Second)
-	lease, err := p.Acquire([]*AccountRef{a}, nil)
+	lease, err := p.Acquire([]*AccountRef{a}, nil, nil)
 	if err != nil {
 		t.Fatalf("acquire after cooldown expiry: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestReconcileKeepsStateByID(t *testing.T) {
 
 	old := p.Reconcile([]*AccountSpec{{ID: 1, ChannelID: 1, Name: "a", MaxConcurrency: 2, Enabled: true},
 		{ID: 2, ChannelID: 1, Name: "b", MaxConcurrency: 0, Enabled: true}})
-	l1, err := p.Acquire([]*AccountRef{old[0]}, nil) // 只占 id=1，断言目标明确
+	l1, err := p.Acquire([]*AccountRef{old[0]}, nil, nil) // 只占 id=1，断言目标明确
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestReconcileKeepsStateByID(t *testing.T) {
 	}
 
 	// 被删除账号的冷却不应泄漏到新账号：新 ref 应该健康
-	if _, err := p.Acquire(newRefs, nil); err != nil {
+	if _, err := p.Acquire(newRefs, nil, nil); err != nil {
 		t.Fatalf("new ref should be healthy: %v", err)
 	}
 }
@@ -135,7 +135,7 @@ func TestSelectionLeastLoadedFirst(t *testing.T) {
 	})
 	seen := map[int64]bool{}
 	for i := 0; i < 2; i++ {
-		l, err := p.Acquire(refs, nil)
+		l, err := p.Acquire(refs, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -156,7 +156,7 @@ func TestNoLongTermBias(t *testing.T) {
 	})
 	counts := map[int64]int{}
 	for i := 0; i < 40; i++ {
-		l, err := p.Acquire(refs, nil)
+		l, err := p.Acquire(refs, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

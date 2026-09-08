@@ -49,6 +49,8 @@ type Model struct {
 	Routes   map[string]Route `yaml:"routes" json:"routes"`
 	Pricing  Pricing          `yaml:"pricing" json:"pricing"`
 	Enabled  bool             `yaml:"enabled" json:"enabled"`
+	// ContextLength 上下文长度（可选）：/v1/models 元数据暴露，客户端据此裁剪上下文
+	ContextLength int `yaml:"context_length" json:"context_length,omitempty"`
 }
 
 // Route 一条上游转发规则。Upstream 存完整 URL（不拼接，因各供应商路径结构不同）。

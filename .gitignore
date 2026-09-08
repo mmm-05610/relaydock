@@ -10,3 +10,4 @@ __pycache__/
 # Windows 重定向误产物（> nul）
 nul
 web/dist
+data/
