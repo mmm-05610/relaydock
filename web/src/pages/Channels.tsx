@@ -203,6 +203,10 @@ function ChannelDrawer({
   onClose: () => void
 }) {
   const channel = channels.find((c) => c.provider === provider)
+  useEffect(() => {
+    // 渠道被删除后自动收起，避免挂在空 Drawer 上
+    if (!channel) onClose()
+  }, [channel, onClose])
   if (!channel) return null
   return (
     <SideSheet title={<span>渠道：{channel.name}（{channel.provider}）</span>} visible onCancel={onClose} width={1040} bodyStyle={{ padding: 16 }}>
@@ -592,7 +596,7 @@ function ChannelFormModal({
 }) {
   const [saving, setSaving] = useState(false)
   return (
-    <Modal title={existing ? `编辑渠道 ${existing.name}` : '新建渠道'} visible onClose={onClose} footer={null}>
+    <Modal title={existing ? `编辑渠道 ${existing.name}` : '新建渠道'} visible onCancel={onClose} footer={null}>
       <Form
         initValues={existing ?? { provider: '', name: '', auth_mode: 'bearer', balance_type: 'balance', balance_url: '', models_url: '' }}
         onSubmit={async (values) => {
@@ -631,7 +635,7 @@ function SetKeyModal({ channel, onClose, onSubmit }: { channel: Channel; onClose
   const [key, setKey] = useState('')
   const [saving, setSaving] = useState(false)
   return (
-    <Modal title={`更新 ${channel.name} 上游凭据`} visible onClose={onClose} footer={null}>
+    <Modal title={`更新 ${channel.name} 上游凭据`} visible onCancel={onClose} footer={null}>
       <div style={{ marginBottom: 12 }}>
         <Text type="tertiary" size="small">
           当前：{channel.key_prefix || '未配置'}。凭据 AES-GCM 加密落库；若该渠道未配置显式账号，此凭据同时作为隐式账号参与转发。
@@ -687,7 +691,7 @@ function ModelFormModal({
     '/v1/responses': { upstream: '', model: '', usage: 'responses' },
   }
   return (
-    <Modal title={existing ? `编辑模型 ${existing.name}` : `为 ${provider} 添加模型`} visible onClose={onClose} footer={null} width={560}>
+    <Modal title={existing ? `编辑模型 ${existing.name}` : `为 ${provider} 添加模型`} visible onCancel={onClose} footer={null} width={560}>
       <Form<ModelFormValues>
         initValues={
           {
@@ -701,7 +705,13 @@ function ModelFormModal({
           setError('')
           try {
             const routes = JSON.parse(values.routes_json || '{}')
-            await onSubmit({ ...values, routes })
+            const pricing = {
+              input_per_m: Number(values.pricing?.input_per_m) || 0,
+              output_per_m: Number(values.pricing?.output_per_m) || 0,
+              cache_read_per_m: Number(values.pricing?.cache_read_per_m) || 0,
+              cache_write_per_m: Number(values.pricing?.cache_write_per_m) || 0,
+            }
+            await onSubmit({ ...values, routes, pricing })
           } catch (e) {
             setError(`routes 不是合法 JSON：${(e as Error).message}`)
           } finally {
@@ -755,7 +765,7 @@ function AccountFormModal({
 }) {
   const [saving, setSaving] = useState(false)
   return (
-    <Modal title={existing ? `编辑账号 ${existing.name}` : `为 ${provider} 添加上游账号`} visible onClose={onClose} footer={null}>
+    <Modal title={existing ? `编辑账号 ${existing.name}` : `为 ${provider} 添加上游账号`} visible onCancel={onClose} footer={null}>
       <Form<AccountFormValues>
         initValues={{ name: existing?.name ?? '', max_concurrency: existing?.max_concurrency ?? 0, enabled: existing?.enabled ?? true }}
         onSubmit={async (values) => {
@@ -814,7 +824,7 @@ function ImportAccountsModal({
   })
 
   return (
-    <Modal title={`批量导入账号到 ${provider}`} visible onClose={onClose} footer={null} width={560}>
+    <Modal title={`批量导入账号到 ${provider}`} visible onCancel={onClose} footer={null} width={560}>
       <div style={{ marginBottom: 8 }}>
         <Text type="tertiary" size="small">
           每行一个凭据；可用「名称:凭据」给账号命名。重复凭据自动跳过。
@@ -921,7 +931,7 @@ function OAuthWizardModal({
   }
 
   return (
-    <Modal title={`OAuth 登录添加订阅账号（${provider}）`} visible onClose={onClose} footer={null} width={600}>
+    <Modal title={`OAuth 登录添加订阅账号（${provider}）`} visible onCancel={onClose} footer={null} width={600}>
       {!stageId ? (
         <>
           <Form labelPosition="left" labelWidth={120}>

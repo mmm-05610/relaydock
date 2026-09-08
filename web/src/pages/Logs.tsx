@@ -23,9 +23,8 @@ export default function Logs() {
     try {
       const data = await api.logs({ limit: pageSize, offset: page * pageSize, model, status: status ? Number(status) : undefined })
       setLogs(data)
-      // 服务端无 count：能取满一页说明还有下一页
-      setTotal(page + 1 < data.length / pageSize + 1 ? data.length + 1 : data.length)
-      setTotal(data.length === pageSize ? 9999 : (page + 1) * pageSize)
+      // 服务端无 count：取满一页假定还有下一页
+      setTotal(data.length === pageSize ? (page + 1) * pageSize + 1 : (page + 1) * pageSize)
     } catch (e) {
       setError(String((e as Error).message ?? e))
     } finally {

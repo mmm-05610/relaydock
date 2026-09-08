@@ -108,7 +108,7 @@ export default function Settings() {
 function PasswordModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (password: string) => Promise<void> }) {
   const [saving, setSaving] = useState(false)
   return (
-    <Modal title="修改面板口令" visible onClose={onClose} footer={null}>
+    <Modal title="修改面板口令" visible onCancel={onClose} footer={null}>
       <Form
         onSubmit={async (values) => {
           setSaving(true)

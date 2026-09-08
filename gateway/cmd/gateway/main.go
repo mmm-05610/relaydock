@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"log"
 	"net"
@@ -33,8 +35,9 @@ func main() {
 	}
 	log.Printf("loaded %d channels", len(cfg.Channels))
 
-	// 存储：有 DATABASE_URL 用 PG，否则内存（本地开发）
+	// 存储：有 DATABASE_URL 用 PG；否则内存（本地开发，管理面功能完整可用）
 	var db *store.PgStore
+	var dbBacking gateway.Backing
 	var keyMgr *keys.Manager
 	ctx := context.Background()
 	if dbURL := os.Getenv("DATABASE_URL"); dbURL != "" {
@@ -43,33 +46,36 @@ func main() {
 			log.Fatalf("connect pg: %v", err)
 		}
 		db = pg
+		dbBacking = pg
 		keyMgr = keys.NewManager(pg)
 		log.Printf("using PostgreSQL store")
 	} else {
-		keyMgr = keys.NewManager(store.NewMemStore())
+		mem := store.NewMemStore()
+		dbBacking = mem
+		keyMgr = keys.NewManager(mem)
 		if raw, err := keyMgr.CreateKey("bootstrap", "", "", 0); err == nil {
 			log.Printf("bootstrap key (仅此一次可见): %s", raw)
 		}
-		log.Printf("using in-memory store (no DATABASE_URL)")
+		log.Printf("using in-memory store (no DATABASE_URL, 管理面全功能)")
 	}
 
-	// 渠道从 PG 加载（空则从 config.yaml 种子导入）
+	// 渠道从存储加载（空则从 config.yaml 种子导入，PG/内存一致）
 	channels := cfg.Channels
-	if db != nil {
-		loaded, err := db.LoadChannels()
+	if dbBacking != nil {
+		loaded, err := dbBacking.LoadChannels()
 		if err != nil {
 			log.Fatalf("load channels: %v", err)
 		}
 		if len(loaded) > 0 {
 			channels = loaded
-			log.Printf("loaded %d channels from DB", len(loaded))
+			log.Printf("loaded %d channels from store", len(loaded))
 		} else {
 			for _, ch := range cfg.Channels {
 				ch.Enabled = true
 				for i := range ch.Models {
 					ch.Models[i].Enabled = true
 				}
-				if err := db.CreateChannel(ch); err != nil {
+				if err := dbBacking.CreateChannel(ch); err != nil {
 					log.Printf("seed channel %s: %v", ch.Provider, err)
 				}
 			}
@@ -79,6 +85,17 @@ func main() {
 
 	// 上游凭据：PG（AES-GCM 加密）优先，env 回退
 	panelPassword := os.Getenv("PANEL_PASSWORD")
+	// 内存模式未设 master key 时生成一次性密钥：凭据加解密在会话内可用，
+	// 重启随内存清零（凭据本就不持久），本地开发开箱即用
+	if db == nil && os.Getenv("GATEWAY_MASTER_KEY") == "" {
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			log.Fatalf("generate ephemeral master key: %v", err)
+		}
+		os.Setenv("GATEWAY_MASTER_KEY", hex.EncodeToString(b))
+		log.Printf("GATEWAY_MASTER_KEY 未设置，已生成一次性 master key（内存模式，重启失效）")
+	}
+
 	upstreamKeys := loadUpstreamKeys(db, channels)
 	if panelPassword == "" {
 		log.Printf("⚠️ 未设置 PANEL_PASSWORD，管理 API 无认证（仅限开发）")
@@ -87,14 +104,10 @@ func main() {
 	// 注意：db 声明为 *PgStore，nil 时不能直接传给 Backing 接口参数
 	//（typed-nil 陷阱：接口非 nil 但底层指针为 nil，网关内 DB==nil 检查会失效）
 	cfg.Channels = channels
-	var dbBacking gateway.Backing
-	if db != nil {
-		dbBacking = db
-	}
 	g := gateway.New(cfg, upstreamKeys, keyMgr, dbBacking, panelPassword, os.Getenv("GATEWAY_MASTER_KEY"))
 
-	// PG 模式：从库加载渠道（含 ID）+ 上游账号池，发布初始快照
-	if db != nil {
+	// 从存储加载渠道（含 ID）+ 上游账号池，发布初始快照
+	if dbBacking != nil {
 		if err := g.RebuildSnapshot(); err != nil {
 			log.Fatalf("rebuild snapshot: %v", err)
 		}

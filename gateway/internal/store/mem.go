@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -8,13 +9,17 @@ import (
 	"gateway/internal/keys"
 )
 
-// MemStore 内存实现（开发用，部署切 PG）。
+// MemStore 内存实现（开发/测试用）：与 PgStore 同等的管理面能力，
+// 本地无 DATABASE_URL 时渠道/模型/账号 CRUD 全功能可用，重启清零。
 type MemStore struct {
-	mu       sync.RWMutex
-	keys     map[string]*keys.Key
-	upstream map[string][]byte
-	logs     []UsageLog
-	nextID   int64
+	mu         sync.RWMutex
+	keys       map[string]*keys.Key
+	upstream   map[string][]byte
+	logs       []UsageLog
+	channels   []config.Channel
+	accounts   []UpstreamAccount
+	nextID     int64
+	accountSeq int64
 }
 
 func NewMemStore() *MemStore {
@@ -106,6 +111,9 @@ func (s *MemStore) GetUpstreamKey(provider string) ([]byte, error) {
 func (s *MemStore) InsertUsageLog(log UsageLog) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if log.CreatedAt.IsZero() {
+		log.CreatedAt = time.Now()
+	}
 	s.logs = append(s.logs, log)
 	return nil
 }
@@ -143,23 +151,208 @@ func (s *MemStore) QueryLogs(filter LogFilter) ([]UsageLog, error) {
 	return out, nil
 }
 
-func (s *MemStore) LoadChannels() ([]config.Channel, error) {
-	return nil, nil
-}
-func (s *MemStore) CreateChannel(ch config.Channel) error             { return nil }
-func (s *MemStore) UpdateChannel(ch config.Channel) error             { return nil }
-func (s *MemStore) DeleteChannel(provider string) error               { return nil }
-func (s *MemStore) CreateModel(provider string, m config.Model) error { return nil }
-func (s *MemStore) UpdateModel(provider string, m config.Model) error { return nil }
-func (s *MemStore) DeleteModel(provider, modelName string) error      { return nil }
+// --- ChannelStore 实现 ---
 
-func (s *MemStore) ListUpstreamAccounts() ([]UpstreamAccount, error) { return nil, nil }
-func (s *MemStore) CreateUpstreamAccount(a *UpstreamAccount) error   { return nil }
-func (s *MemStore) UpdateUpstreamAccount(a UpstreamAccount) error    { return nil }
-func (s *MemStore) DeleteUpstreamAccount(id int64) error             { return nil }
-func (s *MemStore) AccountUsageStats(days int) ([]AccountUsage, error) {
-	return nil, nil // 内存模式无历史用量
+func (s *MemStore) LoadChannels() ([]config.Channel, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]config.Channel, len(s.channels))
+	copy(out, s.channels)
+	return out, nil
 }
-func (s *MemStore) SetUpstreamToken(id int64, encryptedToken []byte, expiresAt time.Time) error {
+
+func (s *MemStore) CreateChannel(ch config.Channel) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range s.channels {
+		if c.Provider == ch.Provider {
+			return fmt.Errorf("channel %q already exists", ch.Provider)
+		}
+	}
+	s.nextID++
+	ch.ID = s.nextID
+	for i := range ch.Models {
+		ch.Models[i].Provider = ch.Provider
+	}
+	s.channels = append(s.channels, ch)
 	return nil
+}
+
+func (s *MemStore) UpdateChannel(ch config.Channel) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.channels {
+		if s.channels[i].Provider == ch.Provider {
+			ch.ID = s.channels[i].ID
+			for j := range ch.Models {
+				ch.Models[j].Provider = ch.Provider
+			}
+			s.channels[i] = ch
+			return nil
+		}
+	}
+	return fmt.Errorf("channel %q not found", ch.Provider)
+}
+
+func (s *MemStore) DeleteChannel(provider string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.channels {
+		if s.channels[i].Provider == provider {
+			s.channels = append(s.channels[:i], s.channels[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("channel %q not found", provider)
+}
+
+func (s *MemStore) findChannelLocked(provider string) *config.Channel {
+	for i := range s.channels {
+		if s.channels[i].Provider == provider {
+			return &s.channels[i]
+		}
+	}
+	return nil
+}
+
+func (s *MemStore) CreateModel(provider string, m config.Model) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ch := s.findChannelLocked(provider)
+	if ch == nil {
+		return fmt.Errorf("channel %q not found", provider)
+	}
+	for i := range ch.Models {
+		if ch.Models[i].Name == m.Name {
+			return fmt.Errorf("model %q already exists", m.Name)
+		}
+	}
+	m.Provider = provider
+	ch.Models = append(ch.Models, m)
+	return nil
+}
+
+func (s *MemStore) UpdateModel(provider string, m config.Model) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ch := s.findChannelLocked(provider)
+	if ch == nil {
+		return fmt.Errorf("channel %q not found", provider)
+	}
+	for i := range ch.Models {
+		if ch.Models[i].Name == m.Name {
+			m.Provider = provider
+			ch.Models[i] = m
+			return nil
+		}
+	}
+	return fmt.Errorf("model %q not found", m.Name)
+}
+
+func (s *MemStore) DeleteModel(provider, modelName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ch := s.findChannelLocked(provider)
+	if ch == nil {
+		return fmt.Errorf("channel %q not found", provider)
+	}
+	for i := range ch.Models {
+		if ch.Models[i].Name == modelName {
+			ch.Models = append(ch.Models[:i], ch.Models[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("model %q not found", modelName)
+}
+
+// --- AccountStore 实现 ---
+
+func (s *MemStore) ListUpstreamAccounts() ([]UpstreamAccount, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]UpstreamAccount, len(s.accounts))
+	copy(out, s.accounts)
+	return out, nil
+}
+
+func (s *MemStore) CreateUpstreamAccount(a *UpstreamAccount) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.accountSeq++
+	a.ID = s.accountSeq
+	s.accounts = append(s.accounts, *a)
+	return nil
+}
+
+func (s *MemStore) UpdateUpstreamAccount(a UpstreamAccount) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.accounts {
+		if s.accounts[i].ID == a.ID {
+			s.accounts[i].Name = a.Name
+			s.accounts[i].EncryptedKey = a.EncryptedKey
+			s.accounts[i].KeyFingerprint = a.KeyFingerprint
+			s.accounts[i].MaxConcurrency = a.MaxConcurrency
+			s.accounts[i].Enabled = a.Enabled
+			return nil
+		}
+	}
+	return fmt.Errorf("account %d not found", a.ID)
+}
+
+func (s *MemStore) DeleteUpstreamAccount(id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.accounts {
+		if s.accounts[i].ID == id {
+			s.accounts = append(s.accounts[:i], s.accounts[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("account %d not found", id)
+}
+
+func (s *MemStore) SetUpstreamToken(id int64, encryptedToken []byte, expiresAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.accounts {
+		if s.accounts[i].ID == id {
+			s.accounts[i].EncryptedToken = encryptedToken
+			s.accounts[i].TokenExpiresAt = expiresAt
+			s.accounts[i].LastRefreshAt = time.Now()
+			return nil
+		}
+	}
+	return fmt.Errorf("account %d not found", id)
+}
+
+// AccountUsageStats 从内存 usage 日志聚合（days 窗口）。
+func (s *MemStore) AccountUsageStats(days int) ([]AccountUsage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cutoff := time.Now().AddDate(0, 0, -days)
+	byAccount := map[int64]*AccountUsage{}
+	for _, l := range s.logs {
+		if l.AccountID <= 0 || l.CreatedAt.Before(cutoff) {
+			continue
+		}
+		st, ok := byAccount[l.AccountID]
+		if !ok {
+			st = &AccountUsage{AccountID: l.AccountID}
+			byAccount[l.AccountID] = st
+		}
+		st.Requests++
+		st.Cost += l.Cost
+		st.Tokens += l.InputTokens + l.OutputTokens + l.CacheReadTokens + l.CacheWriteTokens
+		st.AvgAttempts += float64(l.Attempts)
+		if l.Status >= 400 {
+			st.Errors++
+		}
+	}
+	out := make([]AccountUsage, 0, len(byAccount))
+	for _, st := range byAccount {
+		st.AvgAttempts /= float64(st.Requests)
+		out = append(out, *st)
+	}
+	return out, nil
 }
