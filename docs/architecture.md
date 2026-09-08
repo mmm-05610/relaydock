@@ -211,6 +211,25 @@ A 机 PG，Go 网关内网连接。schema 见 §7。**6 张表**：channels / mo
 - 管理 API（信息架构对齐 gpt-load/new-api 收敛形态）：列表带池级健康汇总（总数/健康/冷却/禁用 + 严重度排序）、批量导入（凭据指纹去重）、批量运维（启停/删除/恢复）、单账号恢复（清冷却+失败状态，仅冷却中合法）、真实调用测试、7 天用量聚合（usage_logs 按 account_id）；运行态含成功/失败/连续失败/最后错误/最后状态码/最后使用时间（进程内，重启清零）；
 - 控制台「渠道与账号」页：渠道 Drawer + 账号池 Tab（汇总条 + 状态筛选 + 批量操作条 + 健康列 + 5s 轻量轮询）。
 
+### 4.6 OAuth 订阅账号编排（Codex 首发）
+
+`oauth_profiles`（config.yaml，随快照发布）定义订阅类型的授权参数；参数取自对应官方 CLI 的公开常量（codex 源自 openai/codex-rs）。
+
+```
+添加账号 → OAuth 登录 → 选 profile → 发起授权（PKCE + state）
+  → 浏览器登录（回调页报错属预期）→ 复制回调 URL/ code 贴回
+  → 网关用 code + verifier 换 token（chatgpt_account_id 取自 id_token claim）
+  → 加密落库为 oauth 型账号，进账号池
+后台：刷新调度器（30s 扫描，过期前 5 分钟续期；失败冷却 10 分钟）
+数据面：oauth 型凭据经内存 cache 动态解析，
+  chatgpt_codex 样式附 chatgpt-account-id + OpenAI-Beta: responses=experimental
+```
+
+- API：`GET /api/oauth/profiles`；`POST .../accounts/oauth/start`、`GET .../oauth/{stage}`、
+  `POST .../oauth/{stage}/code`、`DELETE .../oauth/{stage}`（stages 进程内 15 分钟 TTL）
+- 表：upstream_accounts 增加 credential_type / oauth_profile / encrypted_token / token_expires_at / last_refresh_at
+- 测试回传 code 支持「完整回调 URL」或「裸 code」两种粘贴方式
+
 ## 5. 协议路由（协议无关 + 渠道管理）
 
 **转发层协议无关**：网关不认识任何协议，只做「认证 → 按 model 查渠道 → 按 URL path 查 route → 原样转发」。协议只存在于两处：

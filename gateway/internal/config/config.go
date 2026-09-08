@@ -10,6 +10,21 @@ import (
 // Config 是 gateway 的静态配置（渠道 = 上游供应商 → 模型路由 + 价格）。
 type Config struct {
 	Channels []Channel `yaml:"channels"`
+	// OAuthProfiles OAuth 订阅账号的授权参数（每个 profile 一种订阅类型，
+	// 如 codex = ChatGPT 订阅账号）。凭据生命周期见 gateway/internal/gateway/oauth.go。
+	OAuthProfiles map[string]OAuthProfile `yaml:"oauth_profiles" json:"oauth_profiles"`
+}
+
+// OAuthProfile 一种 OAuth 订阅凭据的授权与使用参数（数据来自对应官方 CLI 的公开常量）。
+type OAuthProfile struct {
+	AuthorizeURL string `yaml:"authorize_url" json:"authorize_url"`
+	TokenURL     string `yaml:"token_url" json:"token_url"`
+	ClientID     string `yaml:"client_id" json:"client_id"`
+	Scopes       string `yaml:"scopes" json:"scopes"`
+	RedirectURI  string `yaml:"redirect_uri" json:"redirect_uri"`
+	// UpstreamAuthStyle 数据面用该凭据请求上游的认证 header 样式：
+	// bearer(默认, 仅 Authorization) | chatgpt_codex(Bearer + chatgpt-account-id + OpenAI-Beta)
+	UpstreamAuthStyle string `yaml:"upstream_auth_style" json:"upstream_auth_style"`
 }
 
 // Channel 一个上游供应商渠道，含余额查询配置 + 支持的模型。

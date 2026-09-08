@@ -14,6 +14,8 @@ type Target struct {
 	AuthMode string // bearer(默认) | x_api_key
 	Key      string // 上游凭据
 	Protocol string // anthropic | responses | chat_completions（决定协议 header）
+	// ExtraHeaders OAuth 等凭据形态需要的额外上游 header（如 chatgpt-account-id）
+	ExtraHeaders map[string]string
 }
 
 // BuildRequest 构造上游请求。除认证 / 协议 header 外 body 原样（纯透传）：
@@ -35,6 +37,9 @@ func BuildRequest(ctx context.Context, method string, body []byte, clientHeader 
 		} else {
 			req.Header.Set("anthropic-version", "2023-06-01")
 		}
+	}
+	for k, v := range t.ExtraHeaders {
+		req.Header.Set(k, v)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	return req, nil

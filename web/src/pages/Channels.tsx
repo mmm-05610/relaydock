@@ -226,6 +226,7 @@ function AccountsPanel({ channel, onChanged }: { channel: Channel; onChanged: ()
   const [selected, setSelected] = useState<number[]>([])
   const [importVisible, setImportVisible] = useState(false)
   const [createVisible, setCreateVisible] = useState(false)
+  const [oauthVisible, setOAuthVisible] = useState(false)
   const [editingAccount, setEditingAccount] = useState<UpstreamAccount | null>(null)
   const timer = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
 
@@ -271,8 +272,9 @@ function AccountsPanel({ channel, onChanged }: { channel: Channel; onChanged: ()
         </Select>
         <Button onClick={() => setImportVisible(true)}>批量导入</Button>
         <Button type="primary" theme="solid" onClick={() => setCreateVisible(true)}>
-          添加账号
+          添加 API Key
         </Button>
+        <Button onClick={() => setOAuthVisible(true)}>OAuth 登录</Button>
       </div>
 
       {/* 批量操作条 */}
@@ -312,6 +314,17 @@ function AccountsPanel({ channel, onChanged }: { channel: Channel; onChanged: ()
                 <Tag color="orange">冷却中</Tag>
               ) : (
                 <Tag color="grey">禁用</Tag>
+              ),
+          },
+          {
+            title: '类型',
+            dataIndex: 'credential_type',
+            width: 90,
+            render: (v: string) =>
+              v === 'oauth' ? (
+                <Tag color="violet">订阅</Tag>
+              ) : (
+                <Tag color="cyan">API</Tag>
               ),
           },
           {
@@ -426,6 +439,17 @@ function AccountsPanel({ channel, onChanged }: { channel: Channel; onChanged: ()
           onClose={() => setImportVisible(false)}
           onDone={() => {
             setImportVisible(false)
+            load()
+            onChanged()
+          }}
+        />
+      )}
+      {oauthVisible && (
+        <OAuthWizardModal
+          provider={channel.provider}
+          onClose={() => setOAuthVisible(false)}
+          onDone={() => {
+            setOAuthVisible(false)
             load()
             onChanged()
           }}
@@ -831,6 +855,133 @@ function ImportAccountsModal({
           导入
         </Button>
       </div>
+    </Modal>
+  )
+}
+
+
+// OAuth 登录向导：发起授权 → 用户浏览器完成登录 → 回调 URL/ code 贴回 → 落库进池
+function OAuthWizardModal({
+  provider,
+  onClose,
+  onDone,
+}: {
+  provider: string
+  onClose: () => void
+  onDone: () => void
+}) {
+  const [profiles, setProfiles] = useState<Record<string, { client_id: string; scopes: string; redirect_uri: string }>>({})
+  const [profile, setProfile] = useState('')
+  const [name, setName] = useState('')
+  const [maxConcurrency, setMaxConcurrency] = useState('0')
+  const [stageId, setStageId] = useState('')
+  const [authURL, setAuthURL] = useState('')
+  const [codeInput, setCodeInput] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    api.oauthProfiles().then((p) => {
+      setProfiles(p)
+      const first = Object.keys(p)[0]
+      if (first) setProfile(first)
+    })
+  }, [])
+
+  const start = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      const r = await api.oauthStart(provider, { profile, name: name || undefined, max_concurrency: Number(maxConcurrency) || 0 })
+      setStageId(r.stage_id)
+      setAuthURL(r.authorize_url)
+    } catch (e) {
+      setError(String((e as Error).message ?? e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const submit = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      const r = await api.oauthSubmitCode(provider, stageId, codeInput)
+      if (r.status === 'completed') {
+        Toast.success(`账号已添加：${r.name}`)
+        onDone()
+      } else {
+        setError(r.error ?? r.status)
+      }
+    } catch (e) {
+      setError(String((e as Error).message ?? e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal title={`OAuth 登录添加订阅账号（${provider}）`} visible onClose={onClose} footer={null} width={600}>
+      {!stageId ? (
+        <>
+          <Form labelPosition="left" labelWidth={120}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+              <Text size="small" style={{ width: 110 }}>订阅类型：</Text>
+              <Select value={profile} onChange={(v) => setProfile(v as string)} style={{ width: 260 }} placeholder="选择订阅类型">
+                {Object.keys(profiles).map((p) => (
+                  <Select.Option key={p} value={p}>
+                    {p}
+                  </Select.Option>
+                ))}
+              </Select>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+              <Text size="small" style={{ width: 110 }}>账号名称：</Text>
+              <Input value={name} onChange={setName} placeholder="可选" style={{ width: 260 }} />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+              <Text size="small" style={{ width: 110 }}>最大并发：</Text>
+              <Input value={maxConcurrency} onChange={setMaxConcurrency} style={{ width: 260 }} />
+            </div>
+          </Form>
+          {error && <Text type="danger" size="small">{error}</Text>}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+            <Button onClick={onClose}>取消</Button>
+            <Button type="primary" theme="solid" loading={busy} disabled={!profile} onClick={start}>
+              发起授权
+            </Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{ marginBottom: 12 }}>
+            <Text strong>第 1 步：</Text>
+            <Text size="small">在新标签页打开授权链接并完成登录（回调页会报"无法访问"，属预期）：</Text>
+            <div style={{ marginTop: 6 }}>
+              <a href={authURL} target="_blank" rel="noreferrer">
+                <Button size="small">打开授权页</Button>
+              </a>
+              <Button size="small" style={{ marginLeft: 8 }} onClick={() => navigator.clipboard.writeText(authURL)}>
+                复制链接
+              </Button>
+            </div>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <Text strong>第 2 步：</Text>
+            <Text size="small">
+              登录完成后，浏览器地址栏会停在 localhost:1455/...，复制整个地址（或其中的 code= 参数）粘贴到下面：
+            </Text>
+            <Input value={codeInput} onChange={setCodeInput} placeholder="http://localhost:1455/auth/callback?code=..." style={{ marginTop: 6, fontFamily: 'monospace' }} />
+          </div>
+          {error && <Text type="danger" size="small">{error}</Text>}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+            <Button onClick={onClose}>关闭</Button>
+            <Button type="primary" theme="solid" loading={busy} disabled={!codeInput} onClick={submit}>
+              提交并添加账号
+            </Button>
+          </div>
+        </>
+      )}
     </Modal>
   )
 }

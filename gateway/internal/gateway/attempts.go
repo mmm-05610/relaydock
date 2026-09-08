@@ -10,6 +10,7 @@ import (
 	"gateway/internal/config"
 	"gateway/internal/pool"
 	"gateway/internal/proxy"
+	"gateway/internal/routing"
 	"gateway/internal/store"
 )
 
@@ -22,7 +23,7 @@ import (
 //   - 全部账号满槽 → 本地 429（带 Retry-After）；全部不可用 → 本地 503；
 //   - 没有下一个账号可试时，透传最近一次上游错误响应（比本地 503 更真实）；
 //   - 每次尝试从原始 body 重新构造请求（ReplaceModel 是纯函数）。
-func (g *Gateway) proxyWithAccounts(w http.ResponseWriter, r *http.Request, m *config.Model, ch *config.Channel, route *config.Route, refs []*pool.AccountRef, originalBody []byte, clientModel string, rec *store.UsageLog) {
+func (g *Gateway) proxyWithAccounts(w http.ResponseWriter, r *http.Request, snap *routing.Snapshot, m *config.Model, ch *config.Channel, route *config.Route, refs []*pool.AccountRef, originalBody []byte, clientModel string, rec *store.UsageLog) {
 	tried := map[int64]bool{}
 	attempts := 0
 
@@ -62,12 +63,14 @@ func (g *Gateway) proxyWithAccounts(w http.ResponseWriter, r *http.Request, m *c
 		rec.Attempts = attempts
 		ref := lease.Account()
 
+		cred, extraHeaders := g.credentialFor(snap, ref)
 		upReq, err := proxy.BuildRequest(r.Context(), r.Method,
 			upstreamBody(originalBody, route, clientModel), r.Header, proxy.Target{
-				URL:      route.Upstream,
-				AuthMode: ch.AuthMode,
-				Key:      ref.Spec.Credential,
-				Protocol: route.Usage,
+				URL:          route.Upstream,
+				AuthMode:     ch.AuthMode,
+				Key:          cred,
+				Protocol:     route.Usage,
+				ExtraHeaders: extraHeaders,
 			})
 		if err != nil {
 			lease.Release()

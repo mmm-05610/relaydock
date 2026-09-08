@@ -85,6 +85,11 @@ CREATE TABLE IF NOT EXISTS upstream_accounts (
   key_fingerprint  TEXT NOT NULL,          -- HMAC（服务端密钥参与），仅去重/日志关联
   max_concurrency  INTEGER NOT NULL DEFAULT 0,  -- 0 = 不限
   enabled          BOOLEAN NOT NULL DEFAULT TRUE,
+  credential_type  TEXT NOT NULL DEFAULT 'api_key', -- api_key | oauth
+  oauth_profile    TEXT NOT NULL DEFAULT '',        -- OAuthProfile 名称（oauth 型必填）
+  encrypted_token  BYTEA,                           -- oauth 型：JSON{access_token,refresh_token,account_id,expires_at}
+  token_expires_at TIMESTAMPTZ,                     -- oauth 型：access token 过期时间
+  last_refresh_at  TIMESTAMPTZ,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(channel_id, name),
@@ -97,3 +102,10 @@ CREATE INDEX IF NOT EXISTS idx_upstream_accounts_channel ON upstream_accounts(ch
 ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS channel_id BIGINT;
 ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS account_id BIGINT;
 ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 1;
+
+-- OAuth 凭据列（既有库幂等迁移）
+ALTER TABLE upstream_accounts ADD COLUMN IF NOT EXISTS credential_type TEXT NOT NULL DEFAULT 'api_key';
+ALTER TABLE upstream_accounts ADD COLUMN IF NOT EXISTS oauth_profile TEXT NOT NULL DEFAULT '';
+ALTER TABLE upstream_accounts ADD COLUMN IF NOT EXISTS encrypted_token BYTEA;
+ALTER TABLE upstream_accounts ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMPTZ;
+ALTER TABLE upstream_accounts ADD COLUMN IF NOT EXISTS last_refresh_at TIMESTAMPTZ;

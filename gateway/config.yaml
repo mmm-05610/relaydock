@@ -77,3 +77,14 @@ channels:
             cache_read_per_m: 0.42,
             cache_write_per_m: 2.625,
           }
+
+# OAuth 订阅账号授权参数（每个 profile 一种订阅类型；参数来自对应官方 CLI 公开常量）
+# codex = ChatGPT 订阅账号（Codex CLI 同款 OAuth，PKCE）；凭据经授权码换取并自动续期
+oauth_profiles:
+  codex:
+    authorize_url: https://auth.openai.com/oauth/authorize
+    token_url: https://auth.openai.com/oauth/token
+    client_id: app_EMoamEEZ73f0CkXaXp7hrann
+    scopes: "openid profile email offline_access api.connectors.read api.connectors.invoke"
+    redirect_uri: http://localhost:1455/auth/callback
+    upstream_auth_style: chatgpt_codex

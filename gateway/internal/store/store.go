@@ -30,6 +30,8 @@ type UsageLog struct {
 }
 
 // UpstreamAccount 一份上游账号（渠道下的独立凭据 + 并发容量），对应 upstream_accounts 表。
+// CredentialType 两种：api_key（EncryptedKey 为静态 key）| oauth（EncryptedToken 为
+// JSON{access_token,refresh_token,account_id,expires_at} 加密包，由刷新调度器续期）。
 type UpstreamAccount struct {
 	ID             int64
 	ChannelID      int64
@@ -38,6 +40,11 @@ type UpstreamAccount struct {
 	KeyFingerprint string
 	MaxConcurrency int64 // 0 = 不限
 	Enabled        bool
+	CredentialType string // api_key | oauth
+	OAuthProfile   string
+	EncryptedToken []byte
+	TokenExpiresAt time.Time
+	LastRefreshAt  time.Time
 }
 
 // AccountStore 上游账号的增删改查（凭据密文由调用方加密）。
@@ -47,6 +54,7 @@ type AccountStore interface {
 	UpdateUpstreamAccount(a UpstreamAccount) error
 	DeleteUpstreamAccount(id int64) error
 	AccountUsageStats(days int) ([]AccountUsage, error) // 按账号聚合最近 N 天用量（PG）
+	SetUpstreamToken(id int64, encryptedToken []byte, expiresAt time.Time) error // oauth 刷新回写
 }
 
 // AccountUsage 账号级用量聚合（usage_logs 按 account_id 分组）。

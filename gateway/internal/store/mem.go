@@ -2,6 +2,7 @@ package store
 
 import (
 	"sync"
+	"time"
 
 	"gateway/internal/config"
 	"gateway/internal/keys"
@@ -158,4 +159,7 @@ func (s *MemStore) UpdateUpstreamAccount(a UpstreamAccount) error    { return ni
 func (s *MemStore) DeleteUpstreamAccount(id int64) error             { return nil }
 func (s *MemStore) AccountUsageStats(days int) ([]AccountUsage, error) {
 	return nil, nil // 内存模式无历史用量
+}
+func (s *MemStore) SetUpstreamToken(id int64, encryptedToken []byte, expiresAt time.Time) error {
+	return nil
 }

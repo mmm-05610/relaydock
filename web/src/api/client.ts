@@ -149,6 +149,15 @@ export interface Channel {
   models: ChannelModel[]
 }
 
+export interface OAuthProfile {
+  authorize_url: string
+  token_url: string
+  client_id: string
+  scopes: string
+  redirect_uri: string
+  upstream_auth_style: string
+}
+
 export interface UpstreamAccount {
   id: number
   name: string
@@ -165,6 +174,9 @@ export interface UpstreamAccount {
   last_status_code: number
   last_error: string
   last_used_at: string | null
+  credential_type: 'api_key' | 'oauth'
+  oauth_profile: string
+  token_expires_at: string | null
   usage: {
     account_id: number
     requests: number
@@ -230,6 +242,14 @@ export const api = {
   deleteAccount: (provider: string, id: number) => del(`/api/channels/${provider}/accounts/${id}`),
   testAccount: (provider: string, id: number, model?: string) =>
     post<{ ok: boolean; error?: string; status?: number; latency_ms?: number }>(`/api/channels/${provider}/accounts/${id}/test`, model ? { model } : {}),
+  oauthProfiles: () => get<Record<string, OAuthProfile>>('/api/oauth/profiles'),
+  oauthStart: (provider: string, body: { profile: string; name?: string; max_concurrency?: number }) =>
+    post<{ stage_id: string; authorize_url: string; expires_at: string }>(`/api/channels/${provider}/accounts/oauth/start`, body),
+  oauthStatus: (provider: string, stage: string) =>
+    get<{ status: string; error?: string; account_id?: number; authorize_url: string; expires_at: string }>(`/api/channels/${provider}/accounts/oauth/${stage}`),
+  oauthSubmitCode: (provider: string, stage: string, codeOrUrl: string) =>
+    post<{ status: string; account_id?: number; name?: string; error?: string }>(`/api/channels/${provider}/accounts/oauth/${stage}/code`, { code_or_url: codeOrUrl }),
+  oauthCancel: (provider: string, stage: string) => del(`/api/channels/${provider}/accounts/oauth/${stage}`),
   recoverAccount: (provider: string, id: number, expectedCoolingUntil?: string | null) =>
     post<{ status: string }>(`/api/channels/${provider}/accounts/${id}/recover`, {
       expected_cooling_until: expectedCoolingUntil ?? undefined,

@@ -138,7 +138,7 @@ func (g *Gateway) handleProxy(w http.ResponseWriter, r *http.Request) {
 	// 显式账号池路径（有账号才走 failover；否则保持单 key 兼容行为）
 	if ch != nil {
 		if refs := snap.AccountsFor(ch); len(refs) > 0 {
-			g.proxyWithAccounts(w, r, m, ch, route, refs, body, model, &rec)
+			g.proxyWithAccounts(w, r, snap, m, ch, route, refs, body, model, &rec)
 			return
 		}
 	}

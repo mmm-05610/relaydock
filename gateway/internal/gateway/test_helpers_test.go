@@ -54,7 +54,7 @@ func setupGatewayTest(t *testing.T, channels []config.Channel, allowedModels str
 	}
 	mem := store.NewMemStore()
 	keyMgr := keys.NewManager(mem)
-	testGW = New(channels, upstreamKeys, keyMgr, mem, "", "")
+	testGW = New(&config.Config{Channels: channels}, upstreamKeys, keyMgr, mem, "", "")
 	raw, err := keyMgr.CreateKeyWithModels("test-key", "test-owner", "test-agent", 0, allowedModels)
 	if err != nil {
 		t.Fatalf("create virtual key: %v", err)

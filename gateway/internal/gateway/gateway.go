@@ -5,6 +5,7 @@ package gateway
 import (
 	"log"
 	"net/http"
+	"sync"
 
 	"gateway/internal/config"
 	"gateway/internal/keys"
@@ -38,16 +39,24 @@ type Gateway struct {
 
 	panelPassword adminAuth // 管理 API 口令
 	masterKeyHex  string    // GATEWAY_MASTER_KEY（上游凭据加解密），可空
+
+	oauthMu    sync.Mutex
+	stages     map[string]*oauthStage    // OAuth 授权流程短生命周期状态
+	oauthCache map[int64]oauthLiveToken  // account_id -> 当前 access token（刷新调度器更新）
 }
 
-// New 装配网关。channels/upstreamKeys 为启动时加载好的初始配置与凭据，
-// panelPassword 为管理 API 口令（空 = 无认证，仅开发），masterKeyHex 可空。
-func New(channels []config.Channel, upstreamKeys map[string]string, keyMgr *keys.Manager, db Backing, panelPassword, masterKeyHex string) *Gateway {
+// New 装配网关。cfg 为启动时加载好的完整配置（渠道 + OAuth profiles），
+// upstreamKeys 为初始凭据；panelPassword 为管理 API 口令（空 = 无认证，仅开发），
+// masterKeyHex 可空。
+func New(cfg *config.Config, upstreamKeys map[string]string, keyMgr *keys.Manager, db Backing, panelPassword, masterKeyHex string) *Gateway {
 	if upstreamKeys == nil {
 		upstreamKeys = map[string]string{}
 	}
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
 	g := &Gateway{
-		Snapshots:    routing.NewStore(&config.Config{Channels: channels}, upstreamKeys),
+		Snapshots:    routing.NewStore(cfg, upstreamKeys),
 		KeyMgr:       keyMgr,
 		Meter:        metering.NewMeter(),
 		DB:           db,
@@ -57,6 +66,9 @@ func New(channels []config.Channel, upstreamKeys map[string]string, keyMgr *keys
 	g.Client = proxy.NewUpstreamClient()
 	g.AdminClient = proxy.NewAdminClient()
 	g.panelPassword.set(panelPassword)
+	g.stages = map[string]*oauthStage{}
+	g.oauthCache = map[int64]oauthLiveToken{}
+	go g.oauthRefreshLoop() // oauth 型账号 token 续期（daemon，进程退出自然结束）
 	return g
 }
 
@@ -104,6 +116,11 @@ func (g *Gateway) Handler(staticDir string) http.Handler {
 	mux.HandleFunc("DELETE /api/channels/{provider}/accounts/{id}", g.handleDeleteAccount)
 	mux.HandleFunc("POST /api/channels/{provider}/accounts/{id}/test", g.handleTestAccount)
 	mux.HandleFunc("POST /api/channels/{provider}/accounts/{id}/recover", g.handleRecoverAccount)
+	mux.HandleFunc("GET /api/oauth/profiles", g.handleOAuthProfiles)
+	mux.HandleFunc("POST /api/channels/{provider}/accounts/oauth/start", g.handleOAuthStart)
+	mux.HandleFunc("GET /api/channels/{provider}/accounts/oauth/{stage}", g.handleOAuthStatus)
+	mux.HandleFunc("POST /api/channels/{provider}/accounts/oauth/{stage}/code", g.handleOAuthSubmitCode)
+	mux.HandleFunc("DELETE /api/channels/{provider}/accounts/oauth/{stage}", g.handleOAuthCancel)
 	mux.HandleFunc("GET /api/settings/upstream", g.handleUpstreamStatus)
 	mux.HandleFunc("POST /api/settings/password", g.handleUpdatePassword)
 	mux.HandleFunc("GET /api/upstream/balance", g.handleUpstreamBalance)
@@ -139,7 +156,7 @@ func (g *Gateway) RebuildSnapshot() error {
 	}
 	refs, byChannel := g.buildAccountView(accounts)
 	g.Snapshots.Update(func(cur *routing.Snapshot) *routing.Snapshot {
-		return cur.WithConfig(&config.Config{Channels: channels}).WithAccounts(byChannel)
+		return cur.WithConfig(&config.Config{Channels: channels, OAuthProfiles: cur.Config.OAuthProfiles}).WithAccounts(byChannel)
 	})
 	_ = refs
 	return nil
@@ -163,18 +180,27 @@ func (g *Gateway) buildAccountView(accounts []store.UpstreamAccount) ([]*pool.Ac
 	var specs []*pool.AccountSpec
 	if masterKey, err := keys.MasterKeyFromHex(g.masterKeyHex); err == nil {
 		for _, a := range accounts {
-			plain, err := keys.Decrypt(a.EncryptedKey, masterKey)
-			if err != nil {
-				log.Printf("account %d(%s): decrypt failed, skip: %v", a.ID, a.Name, err)
-				continue
+			cred, credType, profileName := "", a.CredentialType, a.OAuthProfile
+			if a.CredentialType == "oauth" {
+				// oauth 型：解 token 包预热内存 cache，Spec.Credential 仅作 fallback
+				cred, credType, profileName = g.buildAccountCredential(a)
+			} else {
+				plain, err := keys.Decrypt(a.EncryptedKey, masterKey)
+				if err != nil {
+					log.Printf("account %d(%s): decrypt failed, skip: %v", a.ID, a.Name, err)
+					continue
+				}
+				cred = string(plain)
 			}
 			specs = append(specs, &pool.AccountSpec{
 				ID:             a.ID,
 				ChannelID:      a.ChannelID,
 				Name:           a.Name,
-				Credential:     string(plain),
+				Credential:     cred,
 				MaxConcurrency: a.MaxConcurrency,
 				Enabled:        a.Enabled,
+				CredentialType: credType,
+				OAuthProfile:   profileName,
 			})
 		}
 	}

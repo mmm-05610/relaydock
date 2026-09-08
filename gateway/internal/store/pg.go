@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"time"
 	"encoding/json"
 	"fmt"
 
@@ -132,7 +133,9 @@ func (s *PgStore) GetUpstreamKey(provider string) ([]byte, error) {
 
 func (s *PgStore) ListUpstreamAccounts() ([]UpstreamAccount, error) {
 	rows, err := s.pool.Query(context.Background(),
-		`SELECT id, channel_id, name, encrypted_key, key_fingerprint, max_concurrency, enabled FROM upstream_accounts ORDER BY id`)
+		`SELECT id, channel_id, name, encrypted_key, key_fingerprint, max_concurrency, enabled,
+		        credential_type, oauth_profile, encrypted_token, token_expires_at, last_refresh_at
+		 FROM upstream_accounts ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +143,8 @@ func (s *PgStore) ListUpstreamAccounts() ([]UpstreamAccount, error) {
 	var out []UpstreamAccount
 	for rows.Next() {
 		var a UpstreamAccount
-		if err := rows.Scan(&a.ID, &a.ChannelID, &a.Name, &a.EncryptedKey, &a.KeyFingerprint, &a.MaxConcurrency, &a.Enabled); err != nil {
+		if err := rows.Scan(&a.ID, &a.ChannelID, &a.Name, &a.EncryptedKey, &a.KeyFingerprint, &a.MaxConcurrency, &a.Enabled,
+			&a.CredentialType, &a.OAuthProfile, &a.EncryptedToken, &a.TokenExpiresAt, &a.LastRefreshAt); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -150,9 +154,11 @@ func (s *PgStore) ListUpstreamAccounts() ([]UpstreamAccount, error) {
 
 func (s *PgStore) CreateUpstreamAccount(a *UpstreamAccount) error {
 	return s.pool.QueryRow(context.Background(),
-		`INSERT INTO upstream_accounts (channel_id, name, encrypted_key, key_fingerprint, max_concurrency, enabled)
-		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-		a.ChannelID, a.Name, a.EncryptedKey, a.KeyFingerprint, a.MaxConcurrency, a.Enabled).Scan(&a.ID)
+		`INSERT INTO upstream_accounts (channel_id, name, encrypted_key, key_fingerprint, max_concurrency, enabled,
+		                                credential_type, oauth_profile, encrypted_token, token_expires_at, last_refresh_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+		a.ChannelID, a.Name, a.EncryptedKey, a.KeyFingerprint, a.MaxConcurrency, a.Enabled,
+		a.CredentialType, a.OAuthProfile, a.EncryptedToken, nullTime(a.TokenExpiresAt), nullTime(a.LastRefreshAt)).Scan(&a.ID)
 }
 
 func (s *PgStore) UpdateUpstreamAccount(a UpstreamAccount) error {
@@ -160,6 +166,22 @@ func (s *PgStore) UpdateUpstreamAccount(a UpstreamAccount) error {
 		`UPDATE upstream_accounts SET name=$1, encrypted_key=$2, key_fingerprint=$3, max_concurrency=$4, enabled=$5, updated_at=now() WHERE id=$6`,
 		a.Name, a.EncryptedKey, a.KeyFingerprint, a.MaxConcurrency, a.Enabled, a.ID)
 	return err
+}
+
+// SetUpstreamToken oauth 刷新调度器回写新 token 包。
+func (s *PgStore) SetUpstreamToken(id int64, encryptedToken []byte, expiresAt time.Time) error {
+	_, err := s.pool.Exec(context.Background(),
+		`UPDATE upstream_accounts SET encrypted_token=$1, token_expires_at=$2, last_refresh_at=now() WHERE id=$3`,
+		encryptedToken, expiresAt, id)
+	return err
+}
+
+// nullTime 零值时间存 NULL。
+func nullTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
 }
 
 func (s *PgStore) DeleteUpstreamAccount(id int64) error {

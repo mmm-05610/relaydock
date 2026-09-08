@@ -16,9 +16,11 @@ type AccountSpec struct {
 	ID             int64
 	ChannelID      int64
 	Name           string
-	Credential     string // 进程内明文，不序列化、不打日志
+	Credential     string // 进程内明文，不序列化、不打日志（oauth 型 = 快照预热时的 access token fallback）
 	MaxConcurrency int64  // 0 = 不限
 	Enabled        bool
+	CredentialType string // api_key(空值等同) | oauth（凭据经 credentialFor 动态解析）
+	OAuthProfile   string
 }
 
 // AccountState 账号运行状态（进程内，重启清零——运行态不落库是设计决策，

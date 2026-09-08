@@ -86,11 +86,12 @@ func main() {
 
 	// 注意：db 声明为 *PgStore，nil 时不能直接传给 Backing 接口参数
 	//（typed-nil 陷阱：接口非 nil 但底层指针为 nil，网关内 DB==nil 检查会失效）
+	cfg.Channels = channels
 	var dbBacking gateway.Backing
 	if db != nil {
 		dbBacking = db
 	}
-	g := gateway.New(channels, upstreamKeys, keyMgr, dbBacking, panelPassword, os.Getenv("GATEWAY_MASTER_KEY"))
+	g := gateway.New(cfg, upstreamKeys, keyMgr, dbBacking, panelPassword, os.Getenv("GATEWAY_MASTER_KEY"))
 
 	// PG 模式：从库加载渠道（含 ID）+ 上游账号池，发布初始快照
 	if db != nil {
