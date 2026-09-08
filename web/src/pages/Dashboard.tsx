@@ -1,4 +1,4 @@
-import { Banner, Card, Col, Descriptions, Row, Spin, Table, Typography } from '@douyinfe/semi-ui'
+import { Banner, Card, Descriptions, Spin, Table, Typography } from '@douyinfe/semi-ui'
 import { useEffect, useState } from 'react'
 import { api, type DashboardStats, type TimeseriesPoint } from '../api/client'
 import EChart from '../components/EChart'
@@ -58,26 +58,14 @@ export default function Dashboard() {
       <Title heading={5} style={{ marginBottom: 16 }}>
         概览
       </Title>
-      <Row gutter={[16, 16]}>
-        <Col span={6}>
-          <StatCard title="今日成本" value={`¥ ${stats.today_cost.toFixed(4)}`} sub="按模型单价折算" />
-        </Col>
-        <Col span={6}>
-          <StatCard title="今日请求" value={String(stats.today_requests)} />
-        </Col>
-        <Col span={6}>
-          <StatCard title="成功率" value={`${(stats.success_rate * 100).toFixed(1)}%`} sub="status < 400 占比" />
-        </Col>
-        <Col span={6}>
-          <StatCard title="平均延迟" value={`${Math.round(stats.avg_latency_ms)} ms`} />
-        </Col>
-        <Col span={6}>
-          <StatCard title="缓存命中" value={`${(stats.cache_hit_rate * 100).toFixed(1)}%`} sub={`缓存读 ${stats.cache_read_tokens.toLocaleString()} tokens`} />
-        </Col>
-        <Col span={6}>
-          <StatCard title="今日 tokens" value={stats.today_tokens.toLocaleString()} />
-        </Col>
-      </Row>
+      <div className="grid-cards">
+        <StatCard title="今日成本" value={`¥ ${stats.today_cost.toFixed(4)}`} sub="按模型单价折算" />
+        <StatCard title="今日请求" value={String(stats.today_requests)} />
+        <StatCard title="成功率" value={`${(stats.success_rate * 100).toFixed(1)}%`} sub="status < 400 占比" />
+        <StatCard title="平均延迟" value={`${Math.round(stats.avg_latency_ms)} ms`} />
+        <StatCard title="缓存命中" value={`${(stats.cache_hit_rate * 100).toFixed(1)}%`} sub={`缓存读 ${stats.cache_read_tokens.toLocaleString()} tokens`} />
+        <StatCard title="今日 tokens" value={stats.today_tokens.toLocaleString()} />
+      </div>
 
       <Card title="近 7 天趋势" style={{ marginTop: 16 }} bodyStyle={{ paddingTop: 8 }}>
         <EChart option={option} height={300} />

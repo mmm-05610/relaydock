@@ -203,13 +203,6 @@ func (s *SqliteStore) GetKeyByHash(hash string) (*keys.Key, error) {
 	return &k, nil
 }
 
-func ptrTime(t time.Time) *time.Time {
-	if t.IsZero() {
-		return nil
-	}
-	return &t
-}
-
 func (s *SqliteStore) ListKeys() ([]keys.Key, error) {
 	rows, err := s.db.Query(
 		`SELECT id, key_hash, name, owner, agent_type, quota_limit, quota_used, enabled, allowed_models, expires_at, last_used_at FROM keys ORDER BY id`)

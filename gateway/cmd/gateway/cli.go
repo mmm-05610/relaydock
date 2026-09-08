@@ -13,6 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"encoding/json"
+
+	"gateway/internal/config"
 	"gateway/internal/gateway"
 	"gateway/internal/keys"
 	"gateway/internal/store"
@@ -27,7 +30,11 @@ func runCLI(args []string) {
 		runSeedDemo()
 		return
 	}
-	fmt.Println("用法: gateway [keys set-upstream --provider <p> | seed-demo]")
+	if len(args) >= 1 && args[0] == "merge-channels" {
+		runMergeChannels(args[1:])
+		return
+	}
+	fmt.Println("用法: gateway [keys set-upstream --provider <p> | seed-demo | merge-channels --into <p> --sources <p1,p2,...>]")
 }
 
 func runSetUpstream(args []string) {
@@ -238,4 +245,173 @@ func openStoreFromEnv() (gateway.Backing, error) {
 		path = "data/relaydock.db"
 	}
 	return store.NewSqliteStore(path)
+}
+
+// runMergeChannels 把多个旧式渠道（一渠道一 key）收敛为一个渠道的多个账号：
+//   - 各源渠道的上游 key 解密后收编为目标渠道的 upstream_account（指纹去重）
+//   - 模型路由取并集（同名模型的协议路由合并），定价取非零者优先
+//   - 源渠道置为禁用（不删除，保留历史归因与回滚余地）
+//   - 写出合并前快照 JSON 到当前目录
+func runMergeChannels(args []string) {
+	into, sources := "", ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--into":
+			if i+1 < len(args) {
+				into = args[i+1]
+			}
+		case "--sources":
+			if i+1 < len(args) {
+				sources = args[i+1]
+			}
+		}
+	}
+	if into == "" || sources == "" {
+		log.Fatal("用法: gateway merge-channels --into <provider> --sources <p1,p2,...>")
+	}
+	masterKey, err := keys.MasterKeyFromHex(os.Getenv("GATEWAY_MASTER_KEY"))
+	if err != nil {
+		log.Fatalf("GATEWAY_MASTER_KEY 需 32 字节 hex: %v", err)
+	}
+	backing, err := openStoreFromEnv()
+	if err != nil {
+		log.Fatalf("open store: %v", err)
+	}
+
+	channels, err := backing.LoadChannels()
+	if err != nil {
+		log.Fatalf("load channels: %v", err)
+	}
+	sourceList := strings.Split(sources, ",")
+	for i := range sourceList {
+		sourceList[i] = strings.TrimSpace(sourceList[i])
+	}
+
+	// 快照备份
+	snapshot := map[string]any{"into": into, "sources": sourceList, "channels": channels}
+	raw, _ := json.MarshalIndent(snapshot, "", "  ")
+	bakFile := fmt.Sprintf("merge-backup-%s.json", time.Now().Format("20060102-150405"))
+	if err := os.WriteFile(bakFile, raw, 0o600); err != nil {
+		log.Fatalf("write backup: %v", err)
+	}
+	fmt.Printf("  源数据快照: %s\n", bakFile)
+
+	var target *config.Channel
+	var sourceChs []*config.Channel
+	for i := range channels {
+		switch {
+		case channels[i].Provider == into:
+			target = &channels[i]
+		default:
+			for _, sp := range sourceList {
+				if channels[i].Provider == sp {
+					ch := channels[i]
+					sourceChs = append(sourceChs, &ch)
+				}
+			}
+		}
+	}
+	if target == nil {
+		log.Fatalf("目标渠道 %q 不存在", into)
+	}
+	if len(sourceChs) == 0 {
+		log.Fatalf("源渠道均不存在: %s", sources)
+	}
+
+	// 1. 收编凭据为账号（同一 master key 加密，密文直接复用）
+	adopted := 0
+	existing, _ := backing.ListUpstreamAccounts()
+	seenFP := map[string]bool{}
+	for _, a := range existing {
+		if a.ChannelID == target.ID {
+			seenFP[a.KeyFingerprint] = true
+		}
+	}
+	for _, sc := range sourceChs {
+		enc, err := backing.GetUpstreamKey(sc.Provider)
+		if err != nil || len(enc) == 0 {
+			fmt.Printf("  跳过 %s：无上游凭据\n", sc.Provider)
+			continue
+		}
+		plain, err := keys.Decrypt(enc, masterKey)
+		if err != nil {
+			log.Fatalf("decrypt %s: %v", sc.Provider, err)
+		}
+		fp := keys.Fingerprint(string(plain), masterKey)
+		if seenFP[fp] {
+			fmt.Printf("  跳过 %s：凭据指纹重复\n", sc.Provider)
+			continue
+		}
+		a := &store.UpstreamAccount{
+			ChannelID:      target.ID,
+			Name:           sc.Provider,
+			EncryptedKey:   enc,
+			KeyFingerprint: fp,
+			Enabled:        true,
+			CredentialType: "api_key",
+		}
+		if err := backing.CreateUpstreamAccount(a); err != nil {
+			log.Fatalf("create account %s: %v", sc.Provider, err)
+		}
+		seenFP[fp] = true
+		adopted++
+		fmt.Printf("  收编账号 %s（id=%d）\n", sc.Provider, a.ID)
+	}
+
+	// 2. 合并模型：路由并集、定价取非零、enabled 取或
+	merged := map[string]config.Model{}
+	order := []string{}
+	add := func(m config.Model) {
+		m.Provider = into
+		if exist, ok := merged[m.Name]; ok {
+			routes := exist.Routes
+			for k, v := range m.Routes {
+				routes[k] = v
+			}
+			exist.Routes = routes
+			if pricingSum(m.Pricing) > pricingSum(exist.Pricing) {
+				exist.Pricing = m.Pricing
+			}
+			exist.Enabled = exist.Enabled || m.Enabled
+			if m.ContextLength > exist.ContextLength {
+				exist.ContextLength = m.ContextLength
+			}
+			merged[m.Name] = exist
+		} else {
+			order = append(order, m.Name)
+			merged[m.Name] = m
+		}
+	}
+	for _, m := range target.Models {
+		add(m)
+	}
+	for _, sc := range sourceChs {
+		for _, m := range sc.Models {
+			add(m)
+		}
+	}
+	final := make([]config.Model, 0, len(order))
+	for _, name := range order {
+		final = append(final, merged[name])
+	}
+	target.Models = final
+	target.Enabled = true
+	if err := backing.UpdateChannel(*target); err != nil {
+		log.Fatalf("update target: %v", err)
+	}
+	fmt.Printf("  目标 %s 模型合并后: %d 个\n", into, len(final))
+
+	// 3. 源渠道禁用
+	for _, sc := range sourceChs {
+		sc.Enabled = false
+		if err := backing.UpdateChannel(*sc); err != nil {
+			log.Printf("disable %s: %v", sc.Provider, err)
+		}
+		fmt.Printf("  源渠道 %s 已禁用\n", sc.Provider)
+	}
+	fmt.Printf("✅ 收敛完成：收编 %d 个账号，合并 %d 个模型。重启网关生效。\n", adopted, len(final))
+}
+
+func pricingSum(p config.Pricing) float64 {
+	return p.InputPerM + p.OutputPerM + p.CacheReadPerM + p.CacheWritePerM
 }

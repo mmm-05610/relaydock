@@ -237,7 +237,15 @@ function KeyFormModal({
       >
         <Form.Input field="name" label="名称" placeholder="如 claude-code-main" rules={[{ required: true, message: '必填' }]} />
         <Form.Input field="owner" label="归属人" placeholder="可选" />
-        <Form.Input field="agent_type" label="Agent 类型" placeholder="claude-code / codex / opencode" />
+        <Form.Select field="agent_type" label="Agent 类型" style={{ width: 240 }} placeholder="选择类型">
+          <Select.Option value="claude-code">claude-code</Select.Option>
+          <Select.Option value="codex">codex</Select.Option>
+          <Select.Option value="opencode">opencode</Select.Option>
+          <Select.Option value="hermes">hermes</Select.Option>
+          <Select.Option value="cursor">cursor</Select.Option>
+          <Select.Option value="windsurf">windsurf</Select.Option>
+          <Select.Option value="antigravity">antigravity</Select.Option>
+        </Form.Select>
         <Form.Input field="quota" label="额度上限" placeholder="0 = 不限" />
         <Form.Input field="allowed_models" label="允许模型（逗号分隔）" placeholder="留空 = 不限" />
         <Form.Select field="expires_in" label="有效期" style={{ width: 200 }} initValue={existing?.expires_at ? 'keep' : 'never'}>

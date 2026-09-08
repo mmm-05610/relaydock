@@ -784,7 +784,15 @@ function AccountFormModal({
       >
         <Form.Input field="name" label="账号名称" placeholder="如 account-a" rules={[{ required: true, message: '必填' }]} />
         <Form.Input field="key" label={existing ? '上游凭据（留空 = 保留原值）' : '上游凭据'} mode="password" rules={existing ? [] : [{ required: true, message: '必填' }]} />
-        <Form.Input field="max_concurrency" label="最大并发（0 = 不限）" />
+        <Form.Select field="max_concurrency" label="最大并发" style={{ width: 220 }} initValue={String(existing?.max_concurrency ?? 0)}>
+          <Select.Option value="0">不限</Select.Option>
+          <Select.Option value="1">1</Select.Option>
+          <Select.Option value="2">2</Select.Option>
+          <Select.Option value="3">3</Select.Option>
+          <Select.Option value="5">5</Select.Option>
+          <Select.Option value="8">8</Select.Option>
+          <Select.Option value="10">10</Select.Option>
+        </Form.Select>
         {existing && <Form.Switch field="enabled" label="启用" />}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
           <Button onClick={onClose}>取消</Button>

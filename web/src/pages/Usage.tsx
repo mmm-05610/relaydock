@@ -1,4 +1,4 @@
-import { Banner, Card, Col, Radio, RadioGroup, Row, Spin, Table, Typography } from '@douyinfe/semi-ui'
+import { Banner, Card, Radio, RadioGroup, Spin, Table, Typography } from '@douyinfe/semi-ui'
 import { useCallback, useEffect, useState } from 'react'
 import { api, type UsageOverview } from '../api/client'
 import EChart from '../components/EChart'
@@ -113,18 +113,11 @@ export default function Usage() {
         <Spin style={{ display: 'block', margin: '80px auto' }} />
       ) : (
         <>
-          <Row gutter={[16, 16]}>
-            <Col span={6}>
-              <StatCard title="请求总数" value={(s?.requests ?? 0).toLocaleString()} sub={`成功率 ${((s?.success_rate ?? 0) * 100).toFixed(1)}%`} />
-            </Col>
-            <Col span={6}>
-              <StatCard title="总成本" value={`¥ ${(s?.cost ?? 0).toFixed(4)}`} />
-            </Col>
-            <Col span={6}>
-              <StatCard title="总 tokens" value={(s?.tokens ?? 0).toLocaleString()} sub={`输入 ${(s?.input_tokens ?? 0).toLocaleString()} / 输出 ${(s?.output_tokens ?? 0).toLocaleString()}`} />
-            </Col>
-            <Col span={6}>
-              <StatCard
+          <div className="grid-cards">
+            <StatCard title="请求总数" value={(s?.requests ?? 0).toLocaleString()} sub={`成功率 ${((s?.success_rate ?? 0) * 100).toFixed(1)}%`} />
+            <StatCard title="总成本" value={`¥ ${(s?.cost ?? 0).toFixed(4)}`} />
+            <StatCard title="总 tokens" value={(s?.tokens ?? 0).toLocaleString()} sub={`输入 ${(s?.input_tokens ?? 0).toLocaleString()} / 输出 ${(s?.output_tokens ?? 0).toLocaleString()}`} />
+            <StatCard
                 title="缓存"
                 value={`读 ${(s?.cache_read_tokens ?? 0).toLocaleString()}`}
                 sub={`写 ${(s?.cache_write_tokens ?? 0).toLocaleString()} · 命中率 ${
@@ -132,22 +125,17 @@ export default function Usage() {
                     ? `${((s.cache_read_tokens / (s.input_tokens + s.cache_read_tokens)) * 100).toFixed(1)}%`
                     : '-'
                 }`}
-              />
-            </Col>
-          </Row>
+          />
+        </div>
 
           <Card style={{ marginTop: 16 }} bodyStyle={{ paddingTop: 8 }}>
             <EChart option={trendOption} height={300} />
           </Card>
 
-          <Row gutter={16} style={{ marginTop: 16 }}>
-            <Col span={12}>
-              <DistributionTable data={ov?.by_model ?? []} title="按模型（Top5 + 其他）" />
-            </Col>
-            <Col span={12}>
-              <DistributionTable data={ov?.by_key ?? []} title="按虚拟 Key（Top5 + 其他）" />
-            </Col>
-          </Row>
+          <div className="grid-tables" style={{ marginTop: 16 }}>
+            <DistributionTable data={ov?.by_model ?? []} title="按模型（Top5 + 其他）" />
+            <DistributionTable data={ov?.by_key ?? []} title="按虚拟 Key（Top5 + 其他）" />
+          </div>
           <Text type="tertiary" size="small" style={{ display: 'block', marginTop: 12 }}>
             粒度自动适配：24 小时/3 天按小时聚合，其余按天聚合。成本按渠道配置单价折算。
           </Text>

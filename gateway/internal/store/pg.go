@@ -134,7 +134,9 @@ func (s *PgStore) GetUpstreamKey(provider string) ([]byte, error) {
 func (s *PgStore) ListUpstreamAccounts() ([]UpstreamAccount, error) {
 	rows, err := s.pool.Query(context.Background(),
 		`SELECT id, channel_id, name, encrypted_key, key_fingerprint, max_concurrency, enabled,
-		        credential_type, oauth_profile, encrypted_token, token_expires_at, last_refresh_at
+		        credential_type, oauth_profile, encrypted_token,
+		        coalesce(extract(epoch from token_expires_at)::bigint, 0),
+		        coalesce(extract(epoch from last_refresh_at)::bigint, 0)
 		 FROM upstream_accounts ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -143,10 +145,13 @@ func (s *PgStore) ListUpstreamAccounts() ([]UpstreamAccount, error) {
 	var out []UpstreamAccount
 	for rows.Next() {
 		var a UpstreamAccount
+		var tokenExp, lastRefresh int64
 		if err := rows.Scan(&a.ID, &a.ChannelID, &a.Name, &a.EncryptedKey, &a.KeyFingerprint, &a.MaxConcurrency, &a.Enabled,
-			&a.CredentialType, &a.OAuthProfile, &a.EncryptedToken, &a.TokenExpiresAt, &a.LastRefreshAt); err != nil {
+			&a.CredentialType, &a.OAuthProfile, &a.EncryptedToken, &tokenExp, &lastRefresh); err != nil {
 			return nil, err
 		}
+		a.TokenExpiresAt = time.Unix(tokenExp, 0)
+		a.LastRefreshAt = time.Unix(lastRefresh, 0)
 		out = append(out, a)
 	}
 	return out, rows.Err()
@@ -739,4 +744,12 @@ func (s *PgStore) TouchLastUsed(hash string) error {
 	_, err := s.pool.Exec(context.Background(),
 		`UPDATE keys SET last_used_at = now() WHERE key_hash = $1`, hash)
 	return err
+}
+
+// ptrTime 零值时间 → nil。
+func ptrTime(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }

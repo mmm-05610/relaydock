@@ -11,3 +11,16 @@ body {
     'Microsoft YaHei', sans-serif;
   font-variant-numeric: tabular-nums;
 }
+
+/* 响应式网格：宽屏多列，窄屏自动堆叠（替代固定 span 栅格） */
+.grid-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+.grid-tables {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 16px;
+  align-items: start;
+}

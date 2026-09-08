@@ -334,8 +334,10 @@ func (g *Gateway) handleChannels(w http.ResponseWriter, r *http.Request) {
 	out := []map[string]any{}
 	for _, ch := range snap.Config.Channels {
 		out = append(out, map[string]any{
+			"id":             ch.ID,
 			"provider":       ch.Provider,
 			"name":           ch.Name,
+			"enabled":        ch.Enabled,
 			"balance_type":   ch.BalanceType,
 			"balance_url":    ch.BalanceURL,
 			"models_url":     ch.ModelsURL,
