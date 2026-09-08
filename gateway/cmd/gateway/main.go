@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -125,9 +126,28 @@ func main() {
 		close(done)
 	}()
 
-	log.Printf("gateway listening on %s", srv.Addr)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("listen: %v", err)
+	// 双栈显式监听：本机开发环境（WSL virtioproxy/mirrored 网络）下，
+	// ":8080" 双栈 socket 的 IPv4-mapped 回环（127.0.0.1）会被静默拒绝，
+	// Windows 侧的 localhost 转发恰好落在这一层。分别监听 tcp4/tcp6，
+	// 保证 127.0.0.1 与 [::1] 都可达；生产 Linux 双监听同样无害。
+	ln4, err := net.Listen("tcp4", "0.0.0.0:8080")
+	if err != nil {
+		log.Fatalf("listen tcp4: %v", err)
+	}
+	ln6, err := net.Listen("tcp6", "[::]:8080")
+	if err != nil {
+		log.Printf("listen tcp6: %v（仅 IPv4 可用）", err)
+	}
+	log.Printf("gateway listening on tcp4 0.0.0.0:8080 + tcp6 [::]:8080")
+	go func() {
+		if err := srv.Serve(ln4); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("serve tcp4: %v", err)
+		}
+	}()
+	if ln6 != nil {
+		if err := srv.Serve(ln6); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("serve tcp6: %v", err)
+		}
 	}
 	<-done
 }
