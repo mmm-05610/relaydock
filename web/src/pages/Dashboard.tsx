@@ -38,11 +38,12 @@ export default function Dashboard() {
   if (error) return <Banner type="danger" description={error} />
   if (!stats) return <Spin style={{ display: 'block', margin: '80px auto' }} />
 
+  const shortDate = (d: string) => d.slice(5, 16).replace('T', ' ')
   const option = {
     tooltip: { trigger: 'axis' as const },
-    legend: { data: ['请求数', '成本(元)'] },
-    grid: { left: 48, right: 48, top: 40, bottom: 32 },
-    xAxis: { type: 'category' as const, data: series.map((p) => p.date) },
+    legend: { data: ['请求数', '成本(元)'], top: 0, type: 'scroll' as const },
+    grid: { top: 44, left: 8, right: 8, bottom: 4, containLabel: true },
+    xAxis: { type: 'category' as const, data: series.map((p) => shortDate(p.date)), axisLabel: { hideOverlap: true } },
     yAxis: [
       { type: 'value' as const, name: '请求' },
       { type: 'value' as const, name: '元', splitLine: { show: false } },

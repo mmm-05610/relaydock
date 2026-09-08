@@ -79,11 +79,13 @@ export default function Usage() {
   const s = ov?.summary
   const series = ov?.series ?? []
 
+  // x 标签缩短：小时粒度 "2026-09-08T16:00:00" → "09-08 16:00"，天粒度 → "09-08"
+  const shortDate = (d: string) => d.slice(5, 16).replace('T', ' ')
   const trendOption = {
     tooltip: { trigger: 'axis' as const },
-    legend: { data: ['请求', '错误', '成本(元)'] },
-    grid: { left: 56, right: 56, top: 40, bottom: 32 },
-    xAxis: { type: 'category' as const, data: series.map((p) => p.date) },
+    legend: { data: ['请求', '错误', '成本(元)'], top: 0, type: 'scroll' as const },
+    grid: { top: 44, left: 8, right: 8, bottom: 4, containLabel: true },
+    xAxis: { type: 'category' as const, data: series.map((p) => shortDate(p.date)), axisLabel: { hideOverlap: true } },
     yAxis: [
       { type: 'value' as const, name: '请求' },
       { type: 'value' as const, name: '元', splitLine: { show: false } },
