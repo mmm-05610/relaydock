@@ -344,6 +344,9 @@ func (g *Gateway) handleBatchAccounts(w http.ResponseWriter, r *http.Request) {
 
 // handleRecoverAccount POST /api/channels/{provider}/accounts/{id}/recover
 // 手动恢复冷却中的账号：清冷却与失败状态。
+// 带 CAS：请求可携带 expected_cooling_until（列表接口返回的值），
+// 与内存当前值不一致（如冷却刚被新的 429 刷新）则 409 拒绝——
+// 恢复动作只在它所依据的观测仍然成立时执行。
 func (g *Gateway) handleRecoverAccount(w http.ResponseWriter, r *http.Request) {
 	if !g.requireAuth(w, r) {
 		return
@@ -360,6 +363,15 @@ func (g *Gateway) handleRecoverAccount(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad id", http.StatusBadRequest)
 		return
 	}
+	var req struct {
+		// 预期的冷却截止时间（RFC3339，来自列表接口）。空 = 跳过 CAS。
+		ExpectedCoolingUntil string `json:"expected_cooling_until"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+
 	for _, ref := range snap.AccountsFor(ch) {
 		if ref.Spec.ID != id {
 			continue
@@ -371,6 +383,19 @@ func (g *Gateway) handleRecoverAccount(w http.ResponseWriter, r *http.Request) {
 		if !ref.IsCooling(time.Now()) {
 			http.Error(w, "account is not cooling", http.StatusBadRequest)
 			return
+		}
+		// CAS：调用方看到的冷却截止与当前不一致 = 期间状态已变（如新 429 刷新），拒绝
+		if req.ExpectedCoolingUntil != "" {
+			cur := ref.Status().CoolingUntil.Format(time.RFC3339Nano)
+			if cur != req.ExpectedCoolingUntil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error":                 "state changed since observation, re-test and retry",
+					"current_cooling_until": cur,
+				})
+				return
+			}
 		}
 		ref.State.Recover()
 		writeJSON(w, map[string]string{"status": "recovered"})

@@ -230,8 +230,10 @@ export const api = {
   deleteAccount: (provider: string, id: number) => del(`/api/channels/${provider}/accounts/${id}`),
   testAccount: (provider: string, id: number, model?: string) =>
     post<{ ok: boolean; error?: string; status?: number; latency_ms?: number }>(`/api/channels/${provider}/accounts/${id}/test`, model ? { model } : {}),
-  recoverAccount: (provider: string, id: number) =>
-    post<{ status: string }>(`/api/channels/${provider}/accounts/${id}/recover`),
+  recoverAccount: (provider: string, id: number, expectedCoolingUntil?: string | null) =>
+    post<{ status: string }>(`/api/channels/${provider}/accounts/${id}/recover`, {
+      expected_cooling_until: expectedCoolingUntil ?? undefined,
+    }),
 
   upstreamStatus: () => get<Record<string, boolean>>('/api/settings/upstream'),
   updatePassword: (password: string) => post('/api/settings/password', { password }),

@@ -375,9 +375,14 @@ function AccountsPanel({ channel, onChanged }: { channel: Channel; onChanged: ()
                     size="small"
                     type="warning"
                     onClick={async () => {
-                      await api.recoverAccount(channel.provider, a.id)
-                      Toast.success('已恢复')
-                      load()
+                      try {
+                        await api.recoverAccount(channel.provider, a.id, a.cooling_until)
+                        Toast.success('已恢复')
+                        load()
+                      } catch (e) {
+                        Toast.error('状态已变化（可能刚被重新限流），请重新测试后再恢复')
+                        load()
+                      }
                     }}
                   >
                     恢复
