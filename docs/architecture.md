@@ -208,7 +208,8 @@ A 机 PG，Go 网关内网连接。schema 见 §7。**6 张表**：channels / mo
 - 全部满槽 → 本地 429（`Retry-After: 5`）；全部冷却/禁用 → 本地 503；稳定 JSON 错误体；
 - 配置热更新经快照原子发布，在途请求持有旧 `AccountRef` 正常归还（`-race` 验证）；
 - 归因：`usage_logs` 增加 `channel_id` / `account_id` / `attempts`；
-- 管理 API：`GET/POST /api/channels/{p}/accounts`、`PUT/DELETE .../accounts/{id}`、`POST .../accounts/{id}/test`（响应含 inflight / cooling 运行时摘要，不含凭据）。
+- 管理 API（信息架构对齐 gpt-load/new-api 收敛形态）：列表带池级健康汇总（总数/健康/冷却/禁用 + 严重度排序）、批量导入（凭据指纹去重）、批量运维（启停/删除/恢复）、单账号恢复（清冷却+失败状态，仅冷却中合法）、真实调用测试、7 天用量聚合（usage_logs 按 account_id）；运行态含成功/失败/连续失败/最后错误/最后状态码/最后使用时间（进程内，重启清零）；
+- 控制台「渠道与账号」页：渠道 Drawer + 账号池 Tab（汇总条 + 状态筛选 + 批量操作条 + 健康列 + 5s 轻量轮询）。
 
 ## 5. 协议路由（协议无关 + 渠道管理）
 

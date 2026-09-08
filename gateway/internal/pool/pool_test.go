@@ -216,3 +216,60 @@ func TestClassifyResponse(t *testing.T) {
 		t.Fatalf("200 class = %v", got.Class)
 	}
 }
+
+// TestRecordResultCounters 观测计数：成功清连续失败、失败累计、
+// client_error 计入失败但不抬连续失败（不惩罚请求侧错误）。
+func TestRecordResultCounters(t *testing.T) {
+	p := New()
+	a := ref(t, p, 1, 0, true)
+
+	a.State.RecordResult(200, "", "")
+	a.State.RecordResult(400, "client_error", "HTTP 400")
+	a.State.RecordResult(429, "rate_limited", "HTTP 429")
+	a.State.RecordResult(429, "rate_limited", "HTTP 429")
+
+	st := a.Status()
+	if st.SuccessCount != 1 || st.FailureCount != 3 {
+		t.Fatalf("counts = %d/%d, want 1/3", st.SuccessCount, st.FailureCount)
+	}
+	if st.ConsecutiveFailures != 2 {
+		t.Fatalf("consecutive = %d, want 2 (client_error 不计入连败)", st.ConsecutiveFailures)
+	}
+	if st.LastStatusCode != 429 || st.LastError != "HTTP 429" || st.LastFailureClass != "rate_limited" {
+		t.Fatalf("last = %d %q %q", st.LastStatusCode, st.LastError, st.LastFailureClass)
+	}
+	if st.LastUsedAt.IsZero() {
+		t.Fatal("last_used_at not set")
+	}
+
+	// 成功后连败清零，累计保留
+	a.State.RecordResult(200, "", "")
+	st = a.Status()
+	if st.ConsecutiveFailures != 0 || st.FailureCount != 3 || st.SuccessCount != 2 {
+		t.Fatalf("after success: %d/%d/%d", st.SuccessCount, st.FailureCount, st.ConsecutiveFailures)
+	}
+}
+
+// TestRecover 手动恢复：清冷却与失败状态，保留累计计数。
+func TestRecover(t *testing.T) {
+	p := New()
+	a := ref(t, p, 1, 0, true)
+	p.Cool(a, time.Minute, "upstream 429")
+	a.State.RecordResult(429, "rate_limited", "HTTP 429")
+
+	if !a.IsCooling(time.Now()) {
+		t.Fatal("should be cooling")
+	}
+	a.State.Recover()
+
+	if a.IsCooling(time.Now()) {
+		t.Fatal("recover should clear cooldown")
+	}
+	st := a.Status()
+	if st.ConsecutiveFailures != 0 || st.LastError != "" || st.LastFailureClass != "" || st.CooldownCause != "" {
+		t.Fatalf("recover did not clear failure state: %+v", st)
+	}
+	if st.FailureCount != 1 || st.SuccessCount != 0 {
+		t.Fatalf("cumulative counts must survive recover: %+v", st)
+	}
+}

@@ -21,12 +21,58 @@ type AccountSpec struct {
 	Enabled        bool
 }
 
-// AccountState 账号运行状态（进程内，重启清零）。
+// AccountState 账号运行状态（进程内，重启清零——运行态不落库是设计决策，
+// 持久化的只有人工启停；见 docs/design-upstream-account-pool.md §2）。
 type AccountState struct {
 	mu            sync.Mutex
 	inflight      int64
 	coolingUntil  time.Time
 	cooldownCause string
+
+	// 观测计数（管理面展示；成功/失败按"该账号承载的每次上游尝试"计）
+	successCount          int64
+	failureCount          int64
+	consecutiveFailures   int64
+	lastStatusCode        int
+	lastError             string
+	lastFailureClass      string // rate_limited | credential | quota | server_error | transport | client_error
+	lastUsedAt            time.Time
+}
+
+// RecordResult 数据面每次上游尝试结束后回写观测计数。
+// status<=0 表示传输层失败（未拿到响应）。
+func (s *AccountState) RecordResult(status int, failureClass string, errMsg string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastUsedAt = time.Now()
+	if failureClass == "" {
+		s.successCount++
+		s.consecutiveFailures = 0
+		s.lastStatusCode = status
+		s.lastError = ""
+		s.lastFailureClass = ""
+		return
+	}
+	s.failureCount++
+	s.lastStatusCode = status
+	s.lastError = errMsg
+	s.lastFailureClass = failureClass
+	// client_error 是请求侧问题，不代表账号健康恶化，不计入连续失败
+	if failureClass != "client_error" {
+		s.consecutiveFailures++
+	}
+}
+
+// Recover 手动恢复：清冷却与失败状态（不清累计计数）。仅冷却中的账号调用合法。
+func (s *AccountState) Recover() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.coolingUntil = time.Time{}
+	s.cooldownCause = ""
+	s.consecutiveFailures = 0
+	s.lastStatusCode = 0
+	s.lastError = ""
+	s.lastFailureClass = ""
 }
 
 // AccountRef 配置与运行状态的组合，随快照发布；请求全程持有同一只读引用。
@@ -73,19 +119,40 @@ func (s *AccountState) coolUntil(t time.Time, cause string) {
 
 // Status 运行时摘要（管理面只读）。
 type Status struct {
-	Inflight      int64     `json:"inflight"`
-	CoolingUntil  time.Time `json:"cooling_until"` // zero = 未冷却
-	CooldownCause string    `json:"cooldown_cause"`
+	Inflight            int64     `json:"inflight"`
+	CoolingUntil        time.Time `json:"cooling_until"`      // zero = 未冷却
+	CooldownCause       string    `json:"cooldown_cause"`
+	SuccessCount        int64     `json:"success_count"`
+	FailureCount        int64     `json:"failure_count"`
+	ConsecutiveFailures int64     `json:"consecutive_failures"`
+	LastStatusCode      int       `json:"last_status_code"`
+	LastError           string    `json:"last_error"`
+	LastFailureClass    string    `json:"last_failure_class"`
+	LastUsedAt          time.Time `json:"last_used_at"`
 }
 
 func (r *AccountRef) Status() Status {
 	r.State.mu.Lock()
 	defer r.State.mu.Unlock()
 	return Status{
-		Inflight:      r.State.inflight,
-		CoolingUntil:  r.State.coolingUntil,
-		CooldownCause: r.State.cooldownCause,
+		Inflight:            r.State.inflight,
+		CoolingUntil:        r.State.coolingUntil,
+		CooldownCause:       r.State.cooldownCause,
+		SuccessCount:        r.State.successCount,
+		FailureCount:        r.State.failureCount,
+		ConsecutiveFailures: r.State.consecutiveFailures,
+		LastStatusCode:      r.State.lastStatusCode,
+		LastError:           r.State.lastError,
+		LastFailureClass:    r.State.lastFailureClass,
+		LastUsedAt:          r.State.lastUsedAt,
 	}
+}
+
+// IsCooling 当前是否在冷却期。
+func (r *AccountRef) IsCooling(now time.Time) bool {
+	r.State.mu.Lock()
+	defer r.State.mu.Unlock()
+	return now.Before(r.State.coolingUntil)
 }
 
 // Lease 一次账号占用。Release 必须幂等（sync.Once）；

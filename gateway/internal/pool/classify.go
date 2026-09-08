@@ -21,6 +21,26 @@ const (
 	ClassServerError              // 5xx：透传，默认不换（结果未知）
 )
 
+// Class Class 的稳定字符串名（日志、管理面展示用）。
+func (c Class) String() string {
+	switch c {
+	case ClassOK:
+		return "ok"
+	case ClassRateLimited:
+		return "rate_limited"
+	case ClassCredential:
+		return "credential"
+	case ClassQuota:
+		return "quota"
+	case ClassClientError:
+		return "client_error"
+	case ClassServerError:
+		return "server_error"
+	default:
+		return "unknown"
+	}
+}
+
 // Verdict 一次上游响应的处置决定。
 type Verdict struct {
 	Class    Class

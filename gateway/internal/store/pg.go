@@ -167,6 +167,31 @@ func (s *PgStore) DeleteUpstreamAccount(id int64) error {
 	return err
 }
 
+// AccountUsageStats 按账号聚合最近 N 天用量（归因列 account_id，隐式账号为 NULL 不参与）。
+func (s *PgStore) AccountUsageStats(days int) ([]AccountUsage, error) {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT account_id, count(*), coalesce(sum(cost),0)::float8,
+		        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0)+coalesce(sum(cache_read_tokens),0)+coalesce(sum(cache_write_tokens),0),
+		        coalesce(avg(attempts),1)::float8,
+		        count(*) FILTER (WHERE status >= 400)
+		 FROM usage_logs
+		 WHERE account_id IS NOT NULL AND created_at > now() - ($1 || ' days')::interval
+		 GROUP BY account_id`, days)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AccountUsage
+	for rows.Next() {
+		var a AccountUsage
+		if err := rows.Scan(&a.AccountID, &a.Requests, &a.Cost, &a.Tokens, &a.AvgAttempts, &a.Errors); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // --- UsageStore 实现 ---
 
 func (s *PgStore) InsertUsageLog(log UsageLog) error {

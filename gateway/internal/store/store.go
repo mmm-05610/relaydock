@@ -46,6 +46,17 @@ type AccountStore interface {
 	CreateUpstreamAccount(a *UpstreamAccount) error // 回填 a.ID
 	UpdateUpstreamAccount(a UpstreamAccount) error
 	DeleteUpstreamAccount(id int64) error
+	AccountUsageStats(days int) ([]AccountUsage, error) // 按账号聚合最近 N 天用量（PG）
+}
+
+// AccountUsage 账号级用量聚合（usage_logs 按 account_id 分组）。
+type AccountUsage struct {
+	AccountID   int64   `json:"account_id"`
+	Requests    int64   `json:"requests"`
+	Cost        float64 `json:"cost"`
+	Tokens      int64   `json:"tokens"`
+	AvgAttempts float64 `json:"avg_attempts"`
+	Errors      int64   `json:"errors"`
 }
 
 // UpstreamStore 上游 key 的加密存取。

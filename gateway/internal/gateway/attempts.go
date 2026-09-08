@@ -79,6 +79,7 @@ func (g *Gateway) proxyWithAccounts(w http.ResponseWriter, r *http.Request, m *c
 		resp, err := g.Client.Do(upReq)
 		if err != nil {
 			// 网络错误/超时：结果未知，不换账号
+			ref.State.RecordResult(0, "transport", err.Error())
 			lease.Release()
 			rec.Status = http.StatusBadGateway
 			rec.Error = err.Error()
@@ -90,6 +91,7 @@ func (g *Gateway) proxyWithAccounts(w http.ResponseWriter, r *http.Request, m *c
 		switch v.Class {
 		case pool.ClassRateLimited, pool.ClassCredential, pool.ClassQuota:
 			// 账号级错误：冷却 + 尝试下一个账号（客户端响应尚未提交）
+			ref.State.RecordResult(resp.StatusCode, v.Class.String(), fmt.Sprintf("HTTP %d", resp.StatusCode))
 			g.Pool.Cool(ref, v.Cooldown, fmt.Sprintf("upstream %d", resp.StatusCode))
 			tried[ref.Spec.ID] = true
 			closePending() // 上一个可切换响应被更近的取代
@@ -100,6 +102,11 @@ func (g *Gateway) proxyWithAccounts(w http.ResponseWriter, r *http.Request, m *c
 			continue
 		default:
 			// 正常响应 / 不可安全重试的错误：原样转发，本请求结束
+			if v.Class == pool.ClassOK {
+				ref.State.RecordResult(resp.StatusCode, "", "")
+			} else {
+				ref.State.RecordResult(resp.StatusCode, v.Class.String(), fmt.Sprintf("HTTP %d", resp.StatusCode))
+			}
 			rec.AccountID = ref.Spec.ID
 			g.relayUpstream(w, resp, m, route, upstreamBody(originalBody, route, clientModel), rec)
 			resp.Body.Close()

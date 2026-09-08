@@ -156,3 +156,6 @@ func (s *MemStore) ListUpstreamAccounts() ([]UpstreamAccount, error) { return ni
 func (s *MemStore) CreateUpstreamAccount(a *UpstreamAccount) error   { return nil }
 func (s *MemStore) UpdateUpstreamAccount(a UpstreamAccount) error    { return nil }
 func (s *MemStore) DeleteUpstreamAccount(id int64) error             { return nil }
+func (s *MemStore) AccountUsageStats(days int) ([]AccountUsage, error) {
+	return nil, nil // 内存模式无历史用量
+}

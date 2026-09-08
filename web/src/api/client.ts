@@ -159,6 +159,25 @@ export interface UpstreamAccount {
   state: 'healthy' | 'cooling' | 'disabled'
   cooling_until: string | null
   cooldown_cause: string
+  success_count: number
+  failure_count: number
+  consecutive_failures: number
+  last_status_code: number
+  last_error: string
+  last_used_at: string | null
+  usage: {
+    account_id: number
+    requests: number
+    cost: number
+    tokens: number
+    avg_attempts: number
+    errors: number
+  } | null
+}
+
+export interface AccountsView {
+  summary: { total: number; healthy: number; cooling: number; disabled: number }
+  items: UpstreamAccount[]
 }
 
 // ---- keys ----
@@ -198,14 +217,21 @@ export const api = {
   updateModel: (provider: string, name: string, body: Partial<ChannelModel>) => put(`/api/channels/${provider}/models/${name}`, body),
   deleteModel: (provider: string, name: string) => del(`/api/channels/${provider}/models/${name}`),
 
-  accounts: (provider: string) => get<UpstreamAccount[]>(`/api/channels/${provider}/accounts`),
+  accounts: (provider: string, withStats?: boolean) =>
+    get<AccountsView>(`/api/channels/${provider}/accounts${withStats ? '?stats=1' : ''}`),
   createAccount: (provider: string, body: { name: string; key: string; max_concurrency: number }) =>
     post<{ id: number; name: string }>(`/api/channels/${provider}/accounts`, body),
+  importAccounts: (provider: string, items: { name?: string; key: string; max_concurrency?: number }[]) =>
+    post<{ added: number; duplicated: number }>(`/api/channels/${provider}/accounts/import`, { items }),
+  batchAccounts: (provider: string, action: 'enable' | 'disable' | 'delete' | 'recover', ids: number[]) =>
+    post<{ affected: number[] }>(`/api/channels/${provider}/accounts/batch`, { action, ids }),
   updateAccount: (provider: string, id: number, body: { name?: string; max_concurrency?: number; enabled?: boolean; key?: string }) =>
     put(`/api/channels/${provider}/accounts/${id}`, body),
   deleteAccount: (provider: string, id: number) => del(`/api/channels/${provider}/accounts/${id}`),
   testAccount: (provider: string, id: number, model?: string) =>
     post<{ ok: boolean; error?: string; status?: number; latency_ms?: number }>(`/api/channels/${provider}/accounts/${id}/test`, model ? { model } : {}),
+  recoverAccount: (provider: string, id: number) =>
+    post<{ status: string }>(`/api/channels/${provider}/accounts/${id}/recover`),
 
   upstreamStatus: () => get<Record<string, boolean>>('/api/settings/upstream'),
   updatePassword: (password: string) => post('/api/settings/password', { password }),
