@@ -227,11 +227,11 @@ func (s *PgStore) AccountUsageStats(days int) ([]AccountUsage, error) {
 
 func (s *PgStore) InsertUsageLog(log UsageLog) error {
 	_, err := s.pool.Exec(context.Background(),
-		`INSERT INTO usage_logs (key_id, model, upstream_model, protocol, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, latency_ms, status, error, request_id, unmetered, channel_id, account_id, attempts)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+		`INSERT INTO usage_logs (key_id, model, upstream_model, protocol, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, latency_ms, status, error, request_id, unmetered, channel_id, account_id, attempts, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, coalesce($18, now()))`,
 		nullInt64(log.KeyID), log.Model, log.UpstreamModel, log.Protocol, log.InputTokens, log.OutputTokens,
 		log.CacheReadTokens, log.CacheWriteTokens, log.Cost, log.LatencyMs, log.Status, log.Error, log.RequestID, log.Unmetered,
-		nullInt64(log.ChannelID), nullInt64(log.AccountID), maxInt(log.Attempts, 1))
+		nullInt64(log.ChannelID), nullInt64(log.AccountID), maxInt(log.Attempts, 1), toUnix(log.CreatedAt))
 	return err
 }
 

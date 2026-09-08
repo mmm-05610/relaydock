@@ -130,7 +130,7 @@ func (s *MemStore) InsertUsageLog(log UsageLog) error {
 	defer s.mu.Unlock()
 	if log.CreatedAt.IsZero() {
 		log.CreatedAt = time.Now()
-	}
+	} // 非零（seed 指定历史时间）保留
 	s.logs = append(s.logs, log)
 	return nil
 }
