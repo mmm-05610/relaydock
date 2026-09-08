@@ -96,6 +96,8 @@ func (g *Gateway) Handler(staticDir string) http.Handler {
 	mux.HandleFunc("GET /api/dashboard", g.handleDashboard)
 	mux.HandleFunc("GET /api/usage/timeseries", g.handleTimeseries)
 	mux.HandleFunc("GET /api/usage/grouped", g.handleGrouped)
+	mux.HandleFunc("GET /api/usage/overview", g.handleUsageOverview)
+	mux.HandleFunc("GET /api/logs/export", g.handleLogsExport)
 	mux.HandleFunc("GET /api/logs", g.handleLogs)
 	mux.HandleFunc("GET /api/channels", g.handleChannels)
 	mux.HandleFunc("POST /api/channels", g.handleCreateChannel)

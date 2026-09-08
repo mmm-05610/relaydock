@@ -3,19 +3,27 @@ package keys
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Key 虚拟 key 记录。
 type Key struct {
-	ID            int64   `json:"id"`
-	KeyHash       string  `json:"key_hash"`
-	Name          string  `json:"name"`
-	Owner         string  `json:"owner"` // 谁拥有（多用户归属）
-	AgentType     string  `json:"agent_type"`
-	QuotaLimit    float64 `json:"quota_limit"` // USD，0 = 不限
-	QuotaUsed     float64 `json:"quota_used"`
-	Enabled       bool    `json:"enabled"`
-	AllowedModels string  `json:"allowed_models"` // 允许访问的模型（逗号分隔，空=不限）
+	ID            int64      `json:"id"`
+	KeyHash       string     `json:"key_hash"`
+	Name          string     `json:"name"`
+	Owner         string     `json:"owner"` // 谁拥有（多用户归属）
+	AgentType     string     `json:"agent_type"`
+	QuotaLimit    float64    `json:"quota_limit"`    // USD，0 = 不限
+	QuotaUsed     float64    `json:"quota_used"`
+	Enabled       bool       `json:"enabled"`
+	AllowedModels string     `json:"allowed_models"` // 允许访问的模型（逗号分隔，空=不限）
+	ExpiresAt     *time.Time `json:"expires_at"`     // nil = 永不过期
+	LastUsedAt    *time.Time `json:"last_used_at"`
+}
+
+// Expired key 是否已过期（四态之一：启用/禁用/过期/耗尽 由调用方组合）。
+func (k *Key) Expired() bool {
+	return k.ExpiresAt != nil && time.Now().After(*k.ExpiresAt)
 }
 
 // CanAccessModel 检查该 key 是否允许访问指定模型。
@@ -53,11 +61,11 @@ func NewManager(store Store) *Manager {
 
 // CreateKey 签发虚拟 key，返回明文（仅此一次，之后只存哈希）。
 func (m *Manager) CreateKey(name, owner, agentType string, quota float64) (string, error) {
-	return m.CreateKeyWithModels(name, owner, agentType, quota, "")
+	return m.CreateKeyWithModels(name, owner, agentType, quota, "", time.Time{})
 }
 
-// CreateKeyWithModels 签发虚拟 key（带允许的模型列表）。
-func (m *Manager) CreateKeyWithModels(name, owner, agentType string, quota float64, allowedModels string) (string, error) {
+// CreateKeyWithModels 签发虚拟 key（带允许的模型列表；expiresAt 零值 = 永不过期）。
+func (m *Manager) CreateKeyWithModels(name, owner, agentType string, quota float64, allowedModels string, expiresAt time.Time) (string, error) {
 	raw, err := GenerateKey()
 	if err != nil {
 		return "", err
@@ -71,10 +79,26 @@ func (m *Manager) CreateKeyWithModels(name, owner, agentType string, quota float
 		Enabled:       true,
 		AllowedModels: allowedModels,
 	}
+	if !expiresAt.IsZero() {
+		exp := expiresAt
+		k.ExpiresAt = &exp
+	}
 	if err := m.store.CreateKey(k); err != nil {
 		return "", err
 	}
 	return raw, nil
+}
+
+// TouchLastUsed 记录最后使用时间（认证成功后调用，旁路）。
+func (m *Manager) TouchLastUsed(hash string) {
+	if st, ok := m.store.(LastUsedStore); ok {
+		_ = st.TouchLastUsed(hash)
+	}
+}
+
+// LastUsedStore 支持记录最后使用时间的存储（PgStore/MemStore）。
+type LastUsedStore interface {
+	TouchLastUsed(hash string) error
 }
 
 // Authenticate 校验 bearer key，含额度硬挡（pre-call）。
@@ -88,6 +112,9 @@ func (m *Manager) Authenticate(raw string) (*Key, error) {
 	}
 	if k.QuotaLimit > 0 && k.QuotaUsed >= k.QuotaLimit {
 		return nil, fmt.Errorf("quota exceeded")
+	}
+	if k.Expired() {
+		return nil, fmt.Errorf("key expired")
 	}
 	return k, nil
 }

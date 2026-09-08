@@ -1,4 +1,4 @@
-import { Banner, Button, Card, Input, Table, Tag, Typography } from '@douyinfe/semi-ui'
+import { Banner, Button, Card, Input, Select, Table, Tag, Typography } from '@douyinfe/semi-ui'
 import { useCallback, useEffect, useState } from 'react'
 import { api, type UsageLog } from '../api/client'
 
@@ -13,6 +13,8 @@ export default function Logs() {
   const [page, setPage] = useState(0)
   const [model, setModel] = useState('')
   const [status, setStatus] = useState('')
+  const [requestId, setRequestId] = useState('')
+  const [days, setDays] = useState(7)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const pageSize = 20
@@ -21,7 +23,14 @@ export default function Logs() {
     setLoading(true)
     setError('')
     try {
-      const data = await api.logs({ limit: pageSize, offset: page * pageSize, model, status: status ? Number(status) : undefined })
+      const data = await api.logs({
+        limit: pageSize,
+        offset: page * pageSize,
+        model,
+        status: status ? Number(status) : undefined,
+        request_id: requestId || undefined,
+        days: days || undefined,
+      })
       setLogs(data ?? [])
       // 服务端无 count：取满一页假定还有下一页
       setTotal(data.length === pageSize ? (page + 1) * pageSize + 1 : (page + 1) * pageSize)
@@ -30,7 +39,7 @@ export default function Logs() {
     } finally {
       setLoading(false)
     }
-  }, [page, model, status])
+  }, [page, model, status, requestId, days])
 
   useEffect(() => {
     load()
@@ -44,9 +53,17 @@ export default function Logs() {
 
       <Card bodyStyle={{ padding: 12 }}>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-          <Input placeholder="按模型名筛选" value={model} onChange={setModel} style={{ width: 220 }} showClear />
-          <Input placeholder="按状态码筛选（如 200）" value={status} onChange={setStatus} style={{ width: 220 }} showClear />
+          <Input placeholder="按模型名筛选" value={model} onChange={setModel} style={{ width: 180 }} showClear />
+          <Input placeholder="按状态码（如 200）" value={status} onChange={setStatus} style={{ width: 150 }} showClear />
+          <Input placeholder="按 request_id 精确筛选" value={requestId} onChange={setRequestId} style={{ width: 240 }} showClear />
+          <Select value={String(days)} onChange={(v) => setDays(Number(v))} style={{ width: 130 }}>
+            <Select.Option value="1">最近 24 小时</Select.Option>
+            <Select.Option value="7">最近 7 天</Select.Option>
+            <Select.Option value="30">最近 30 天</Select.Option>
+            <Select.Option value="0">全部</Select.Option>
+          </Select>
           <Button onClick={() => { setPage(0); load() }}>查询</Button>
+          <Button onClick={() => window.open(`/api/logs/export?days=${days || 30}`)}>导出 CSV</Button>
           <Text type="tertiary" size="small">
             每页 {pageSize} 条，按时间倒序
           </Text>
@@ -83,7 +100,19 @@ export default function Logs() {
             ) : null
           }
           columns={[
-            { title: '时间', dataIndex: 'created_at', width: 165, render: (v: string) => new Date(v).toLocaleString('zh-CN') },
+            {
+              title: '时间',
+              dataIndex: 'created_at',
+              width: 165,
+              render: (v: string, rec: UsageLog) => (
+                <Text
+                  size="small"
+                  copyable={rec.request_id ? { content: rec.request_id } : undefined}
+                >
+                  {new Date(v).toLocaleString('zh-CN')}
+                </Text>
+              ),
+            },
             { title: '模型', dataIndex: 'model', width: 150 },
             {
               title: '状态',

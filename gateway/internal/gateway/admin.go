@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/csv"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -88,12 +89,13 @@ func (g *Gateway) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		AgentType     string  `json:"agent_type"`
 		Quota         float64 `json:"quota"`
 		AllowedModels string  `json:"allowed_models"`
+		ExpiresIn     string  `json:"expires_in"` // never|1h|1d|7d|30d|90d
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
-	raw, err := g.KeyMgr.CreateKeyWithModels(req.Name, req.Owner, req.AgentType, req.Quota, req.AllowedModels)
+	raw, err := g.KeyMgr.CreateKeyWithModels(req.Name, req.Owner, req.AgentType, req.Quota, req.AllowedModels, expiresFromPreset(req.ExpiresIn))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -155,14 +157,20 @@ func (g *Gateway) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		AgentType     string  `json:"agent_type"`
 		Quota         float64 `json:"quota"`
 		AllowedModels string  `json:"allowed_models"`
+		ExpiresIn     string  `json:"expires_in"` // never|1h|1d|7d|30d|90d|keep（编辑时 keep = 不变）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
+	exp, err := expiresAtForUpdate(hash, req.ExpiresIn, g.KeyMgr)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if err := g.KeyMgr.UpdateKey(keys.Key{
 		KeyHash: hash, Name: req.Name, Owner: req.Owner, AgentType: req.AgentType,
-		QuotaLimit: req.Quota, AllowedModels: req.AllowedModels,
+		QuotaLimit: req.Quota, AllowedModels: req.AllowedModels, ExpiresAt: exp,
 	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -772,4 +780,108 @@ func parseQuota(r io.Reader) map[string]any {
 		}
 	}
 	return map[string]any{"interval_remain_percent": interval, "weekly_remain_percent": weekly}
+}
+
+
+// expiresFromPreset 过期快捷档解析（never = 永不过期）。
+func expiresFromPreset(preset string) time.Time {
+	switch preset {
+	case "1h":
+		return time.Now().Add(time.Hour)
+	case "1d":
+		return time.Now().AddDate(0, 0, 1)
+	case "7d":
+		return time.Now().AddDate(0, 0, 7)
+	case "30d":
+		return time.Now().AddDate(0, 0, 30)
+	case "90d":
+		return time.Now().AddDate(0, 0, 90)
+	default:
+		return time.Time{}
+	}
+}
+
+// expiresAtForUpdate 编辑时解析过期时间：空/keep = 保持不变；never = 清除。
+func expiresAtForUpdate(hash, preset string, mgr *keys.Manager) (*time.Time, error) {
+	switch preset {
+	case "", "keep":
+		if cur, err := mgr.GetKey(hash); err == nil && cur != nil {
+			return cur.ExpiresAt, nil
+		}
+		return nil, nil
+	case "never":
+		return nil, nil
+	default:
+		t := expiresFromPreset(preset)
+		if t.IsZero() {
+			return nil, nil
+		}
+		return &t, nil
+	}
+}
+
+// handleUsageOverview GET /api/usage/overview?days=7 —— 单端点聚合（summary+series+分布 top5+Other）。
+func (g *Gateway) handleUsageOverview(w http.ResponseWriter, r *http.Request) {
+	if !g.requireAuth(w, r) {
+		return
+	}
+	days := 7
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 90 {
+			days = n
+		}
+	}
+	if g.DB == nil {
+		writeJSON(w, store.UsageOverview{Series: []store.UsageOverviewPoint{}, ByModel: []store.UsageDistribution{}, ByKey: []store.UsageDistribution{}})
+		return
+	}
+	ov, err := g.DB.GetUsageOverview(days)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if ov.Series == nil {
+		ov.Series = []store.UsageOverviewPoint{}
+	}
+	if ov.ByModel == nil {
+		ov.ByModel = []store.UsageDistribution{}
+	}
+	if ov.ByKey == nil {
+		ov.ByKey = []store.UsageDistribution{}
+	}
+	writeJSON(w, ov)
+}
+
+// handleLogsExport GET /api/logs/export?days=30 —— CSV 导出（流式，含 BOM 便于 Excel）。
+func (g *Gateway) handleLogsExport(w http.ResponseWriter, r *http.Request) {
+	if !g.requireAuth(w, r) {
+		return
+	}
+	days := 30
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			days = n
+		}
+	}
+	logs, err := g.DB.QueryLogs(store.LogFilter{Days: days, Limit: 100000})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=relaydock-usage-%dd.csv", days))
+	w.Write([]byte("\xef\xbb\xbf")) // UTF-8 BOM
+	cw := csv.NewWriter(w)
+	_ = cw.Write([]string{"时间", "模型", "上游模型", "协议", "状态", "输入tokens", "输出tokens", "缓存读", "缓存写", "成本(元)", "延迟ms", "尝试次数", "request_id", "错误"})
+	for _, l := range logs {
+		_ = cw.Write([]string{
+			l.CreatedAt.Format("2006-01-02 15:04:05"), l.Model, l.UpstreamModel, l.Protocol,
+			strconv.Itoa(l.Status),
+			strconv.FormatInt(l.InputTokens, 10), strconv.FormatInt(l.OutputTokens, 10),
+			strconv.FormatInt(l.CacheReadTokens, 10), strconv.FormatInt(l.CacheWriteTokens, 10),
+			fmt.Sprintf("%.6f", l.Cost), strconv.FormatInt(l.LatencyMs, 10), strconv.Itoa(l.Attempts),
+			l.RequestID, l.Error,
+		})
+	}
+	cw.Flush()
 }

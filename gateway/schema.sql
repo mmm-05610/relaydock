@@ -20,7 +20,9 @@ CREATE TABLE IF NOT EXISTS keys (
   quota_used     NUMERIC(12,6) NOT NULL DEFAULT 0,
   enabled        BOOLEAN NOT NULL DEFAULT TRUE,
   allowed_models TEXT NOT NULL DEFAULT '',  -- 允许访问的模型（逗号分隔，空=不限）
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at     TIMESTAMPTZ,               -- NULL = 永不过期
+  last_used_at   TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS usage_logs (
@@ -109,3 +111,7 @@ ALTER TABLE upstream_accounts ADD COLUMN IF NOT EXISTS oauth_profile TEXT NOT NU
 ALTER TABLE upstream_accounts ADD COLUMN IF NOT EXISTS encrypted_token BYTEA;
 ALTER TABLE upstream_accounts ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMPTZ;
 ALTER TABLE upstream_accounts ADD COLUMN IF NOT EXISTS last_refresh_at TIMESTAMPTZ;
+
+-- 虚拟 key 过期/最后使用（既有库幂等迁移）
+ALTER TABLE keys ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+ALTER TABLE keys ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ;

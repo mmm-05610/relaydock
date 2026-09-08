@@ -48,6 +48,23 @@ const get = <T>(path: string) => request<T>(path)
 
 // ---- 类型（对齐 Go json 标签） ----
 
+export interface UsageOverview {
+  summary: {
+    requests: number
+    errors: number
+    success_rate: number
+    tokens: number
+    input_tokens: number
+    output_tokens: number
+    cache_read_tokens: number
+    cache_write_tokens: number
+    cost: number
+  }
+  series: { date: string; requests: number; errors: number; tokens: number; cost: number }[]
+  by_model: { group: string; requests: number; tokens: number; cost: number }[]
+  by_key: { group: string; requests: number; tokens: number; cost: number }[]
+}
+
 export interface VirtualKey {
   id: number
   key_hash: string
@@ -58,6 +75,8 @@ export interface VirtualKey {
   quota_used: number
   enabled: boolean
   allowed_models: string
+  expires_at: string | null
+  last_used_at: string | null
 }
 
 export interface UsageLog {
@@ -198,14 +217,15 @@ export const api = {
   verify: () => get<Record<string, boolean>>('/api/settings/upstream'),
 
   listKeys: () => get<VirtualKey[]>('/api/keys'),
-  createKey: (body: { name: string; owner: string; agent_type: string; quota: number; allowed_models: string }) =>
+  createKey: (body: { name: string; owner: string; agent_type: string; quota: number; allowed_models: string; expires_in?: string }) =>
     post<{ key: string; note: string }>('/api/keys', body),
   revokeKey: (key_hash: string) => post('/api/keys/revoke', { key_hash }),
   getKey: (hash: string) =>
     get<{ key: VirtualKey; cost: number; tokens: number; requests: number; recent: UsageLog[] }>(`/api/keys/${hash}`),
-  updateKey: (hash: string, body: { name: string; owner: string; agent_type: string; quota: number; allowed_models: string }) =>
+  updateKey: (hash: string, body: { name: string; owner: string; agent_type: string; quota: number; allowed_models: string; expires_in?: string }) =>
     put(`/api/keys/${hash}`, body),
   rotateKey: (hash: string) => post<{ key: string; note: string }>(`/api/keys/${hash}/rotate`),
+  deleteKey: (hash: string) => del(`/api/keys/${hash}`),
   updateQuota: (hash: string, quota: number) => post(`/api/keys/${hash}/quota`, { quota }),
 
   usage: () => get<UsageStats>('/api/usage'),
@@ -214,8 +234,10 @@ export const api = {
     get<TimeseriesPoint[]>(`/api/usage/timeseries?${new URLSearchParams(clean(params))}`),
   grouped: (params: { by: string; days?: number; from?: string; to?: string }) =>
     get<GroupedUsage[]>(`/api/usage/grouped?${new URLSearchParams(clean(params))}`),
-  logs: (params: { limit?: number; offset?: number; model?: string; status?: number }) =>
+  logs: (params: { limit?: number; offset?: number; model?: string; status?: number; request_id?: string; days?: number }) =>
     get<UsageLog[]>(`/api/logs?${new URLSearchParams(clean(params))}`),
+  overview: (days: number) => get<UsageOverview>(`/api/usage/overview?days=${days}`),
+  logsExportURL: (days: number) => `/api/logs/export?days=${days}`,
 
   channels: () => get<Channel[]>('/api/channels'),
   createChannel: (body: Partial<Channel>) => post('/api/channels', body),

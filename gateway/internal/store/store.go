@@ -57,6 +57,45 @@ type AccountStore interface {
 	SetUpstreamToken(id int64, encryptedToken []byte, expiresAt time.Time) error // oauth 刷新回写
 }
 
+// UsageOverview 用量分析聚合结果（单端点契约：summary + series + distributions）。
+// 粒度由存储层按窗口自动决定（<=2 天小时粒度，其余天粒度）。
+type UsageOverview struct {
+	Summary UsageOverviewSummary `json:"summary"`
+	Series  []UsageOverviewPoint `json:"series"`
+	ByModel []UsageDistribution  `json:"by_model"`
+	ByKey   []UsageDistribution  `json:"by_key"`
+}
+
+// UsageOverviewSummary 窗口内汇总。
+type UsageOverviewSummary struct {
+	Requests        int64   `json:"requests"`
+	Errors          int64   `json:"errors"`
+	SuccessRate     float64 `json:"success_rate"`
+	Tokens          int64   `json:"tokens"`
+	InputTokens     int64   `json:"input_tokens"`
+	OutputTokens    int64   `json:"output_tokens"`
+	CacheReadTokens int64   `json:"cache_read_tokens"`
+	CacheWriteTokens int64  `json:"cache_write_tokens"`
+	Cost            float64 `json:"cost"`
+}
+
+// UsageOverviewPoint 时间桶。
+type UsageOverviewPoint struct {
+	Date     string  `json:"date"`
+	Requests int64   `json:"requests"`
+	Errors   int64   `json:"errors"`
+	Tokens   int64   `json:"tokens"`
+	Cost     float64 `json:"cost"`
+}
+
+// UsageDistribution 分布条目（Top-N 由调用方截断归并 Other）。
+type UsageDistribution struct {
+	Group    string  `json:"group"`
+	Requests int64   `json:"requests"`
+	Tokens   int64   `json:"tokens"`
+	Cost     float64 `json:"cost"`
+}
+
 // AccountUsage 账号级用量聚合（usage_logs 按 account_id 分组）。
 type AccountUsage struct {
 	AccountID   int64   `json:"account_id"`
@@ -92,6 +131,7 @@ type UsageStore interface {
 	GetTimeseries(r TimeRange) ([]TimeseriesPoint, error)
 	GetGrouped(by string, r TimeRange) ([]GroupedUsage, error)
 	QueryLogs(filter LogFilter) ([]UsageLog, error)
+	GetUsageOverview(days int) (*UsageOverview, error)
 }
 
 // TimeRange 用量查询的时间范围（三种方式取一）。
@@ -103,11 +143,13 @@ type TimeRange struct {
 
 // LogFilter 日志查询筛选。
 type LogFilter struct {
-	KeyID  int64
-	Model  string
-	Status int // 0 = 不限
-	Limit  int
-	Offset int
+	KeyID     int64
+	Model     string
+	Status    int    // 0 = 不限
+	RequestID string // 客户端请求 ID（精确匹配）
+	Days      int    // 最近 N 天，0 = 不限
+	Limit     int
+	Offset    int
 }
 
 // UsageStats 用量统计（汇总 + 按模型 + 按 key）。

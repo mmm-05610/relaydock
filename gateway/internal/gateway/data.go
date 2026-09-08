@@ -71,6 +71,7 @@ func (g *Gateway) handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rec.KeyID = authKey.ID
+	g.KeyMgr.TouchLastUsed(authKey.KeyHash) // 旁路：最后使用时间
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {

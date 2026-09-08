@@ -33,9 +33,9 @@ func NewPgStore(ctx context.Context, connString string) (*PgStore, error) {
 
 func (s *PgStore) CreateKey(k keys.Key) error {
 	_, err := s.pool.Exec(context.Background(),
-		`INSERT INTO keys (key_hash, name, owner, agent_type, quota_limit, quota_used, enabled, allowed_models)
-		 VALUES ($1, $2, $3, $4, $5, 0, $6, $7)`,
-		k.KeyHash, k.Name, k.Owner, k.AgentType, nullFloat(k.QuotaLimit), k.Enabled, k.AllowedModels)
+		`INSERT INTO keys (key_hash, name, owner, agent_type, quota_limit, quota_used, enabled, allowed_models, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8)`,
+		k.KeyHash, k.Name, k.Owner, k.AgentType, nullFloat(k.QuotaLimit), k.Enabled, k.AllowedModels, nullTime(k.ExpiresAt))
 	return err
 }
 
@@ -43,9 +43,9 @@ func (s *PgStore) GetKeyByHash(hash string) (*keys.Key, error) {
 	var k keys.Key
 	var quotaLimit *float64
 	err := s.pool.QueryRow(context.Background(),
-		`SELECT id, key_hash, name, coalesce(owner,''), agent_type, quota_limit, quota_used, enabled, coalesce(allowed_models,'')
+		`SELECT id, key_hash, name, coalesce(owner,''), agent_type, quota_limit, quota_used, enabled, coalesce(allowed_models,''), expires_at, last_used_at
 		 FROM keys WHERE key_hash = $1`, hash).
-		Scan(&k.ID, &k.KeyHash, &k.Name, &k.Owner, &k.AgentType, &quotaLimit, &k.QuotaUsed, &k.Enabled, &k.AllowedModels)
+		Scan(&k.ID, &k.KeyHash, &k.Name, &k.Owner, &k.AgentType, &quotaLimit, &k.QuotaUsed, &k.Enabled, &k.AllowedModels, &k.ExpiresAt, &k.LastUsedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -60,7 +60,7 @@ func (s *PgStore) GetKeyByHash(hash string) (*keys.Key, error) {
 
 func (s *PgStore) ListKeys() ([]keys.Key, error) {
 	rows, err := s.pool.Query(context.Background(),
-		`SELECT id, key_hash, name, coalesce(owner,''), agent_type, quota_limit, quota_used, enabled, coalesce(allowed_models,'') FROM keys ORDER BY id`)
+		`SELECT id, key_hash, name, coalesce(owner,''), agent_type, quota_limit, quota_used, enabled, coalesce(allowed_models,''), expires_at, last_used_at FROM keys ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +69,7 @@ func (s *PgStore) ListKeys() ([]keys.Key, error) {
 	for rows.Next() {
 		var k keys.Key
 		var quotaLimit *float64
-		if err := rows.Scan(&k.ID, &k.KeyHash, &k.Name, &k.Owner, &k.AgentType, &quotaLimit, &k.QuotaUsed, &k.Enabled, &k.AllowedModels); err != nil {
+		if err := rows.Scan(&k.ID, &k.KeyHash, &k.Name, &k.Owner, &k.AgentType, &quotaLimit, &k.QuotaUsed, &k.Enabled, &k.AllowedModels, &k.ExpiresAt, &k.LastUsedAt); err != nil {
 			return nil, err
 		}
 		if quotaLimit != nil {
@@ -100,8 +100,8 @@ func (s *PgStore) UpdateQuota(hash string, limit float64) error {
 
 func (s *PgStore) UpdateKey(k keys.Key) error {
 	_, err := s.pool.Exec(context.Background(),
-		`UPDATE keys SET name=$1, owner=$2, agent_type=$3, quota_limit=$4, allowed_models=$5 WHERE key_hash=$6`,
-		k.Name, k.Owner, k.AgentType, nullFloat(k.QuotaLimit), k.AllowedModels, k.KeyHash)
+		`UPDATE keys SET name=$1, owner=$2, agent_type=$3, quota_limit=$4, allowed_models=$5, expires_at=$6 WHERE key_hash=$7`,
+		k.Name, k.Owner, k.AgentType, nullFloat(k.QuotaLimit), k.AllowedModels, nullTime(k.ExpiresAt), k.KeyHash)
 	return err
 }
 
@@ -176,10 +176,19 @@ func (s *PgStore) SetUpstreamToken(id int64, encryptedToken []byte, expiresAt ti
 	return err
 }
 
-// nullTime 零值时间存 NULL。
-func nullTime(t time.Time) any {
-	if t.IsZero() {
-		return nil
+// nullTime 时间/时间指针存 NULL（零值或 nil）。
+func nullTime(t any) any {
+	switch v := t.(type) {
+	case *time.Time:
+		if v == nil || v.IsZero() {
+			return nil
+		}
+		return *v
+	case time.Time:
+		if v.IsZero() {
+			return nil
+		}
+		return v
 	}
 	return t
 }
@@ -424,6 +433,83 @@ func (s *PgStore) GetGrouped(by string, r TimeRange) ([]GroupedUsage, error) {
 }
 
 // QueryLogs 请求日志查询（筛选 + 分页）。
+// GetUsageOverview 用量分析聚合：summary + 时间序列（按窗口自动小时/日粒度）+ 按模型/key 分布。
+func (s *PgStore) GetUsageOverview(days int) (*UsageOverview, error) {
+	ctx := context.Background()
+	win := fmt.Sprintf("now() - '%d days'::interval", days)
+	gran := "day"
+	if days <= 2 {
+		gran = "hour"
+	}
+	ov := &UsageOverview{}
+
+	if err := s.pool.QueryRow(ctx,
+		`SELECT count(*), count(*) FILTER (WHERE status >= 400),
+		        coalesce(sum(input_tokens),0), coalesce(sum(output_tokens),0),
+		        coalesce(sum(cache_read_tokens),0), coalesce(sum(cache_write_tokens),0),
+		        coalesce(sum(cost),0)::float8
+		 FROM usage_logs WHERE created_at > `+win).Scan(
+		&ov.Summary.Requests, &ov.Summary.Errors,
+		&ov.Summary.InputTokens, &ov.Summary.OutputTokens,
+		&ov.Summary.CacheReadTokens, &ov.Summary.CacheWriteTokens, &ov.Summary.Cost); err != nil {
+		return nil, err
+	}
+	ov.Summary.Tokens = ov.Summary.InputTokens + ov.Summary.OutputTokens + ov.Summary.CacheReadTokens + ov.Summary.CacheWriteTokens
+	if ov.Summary.Requests > 0 {
+		ov.Summary.SuccessRate = float64(ov.Summary.Requests-ov.Summary.Errors) / float64(ov.Summary.Requests)
+	}
+
+	rows, err := s.pool.Query(ctx,
+		`SELECT date_trunc('`+gran+`', created_at), count(*), count(*) FILTER (WHERE status >= 400),`,
+	)
+	_ = rows
+	// 序列
+	seriesRows, err := s.pool.Query(ctx,
+		`SELECT date_trunc('`+gran+`', created_at)::text, count(*), count(*) FILTER (WHERE status >= 400),
+		        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0)+coalesce(sum(cache_read_tokens),0)+coalesce(sum(cache_write_tokens),0),
+		        coalesce(sum(cost),0)::float8
+		 FROM usage_logs WHERE created_at > `+win+` GROUP BY 1 ORDER BY 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer seriesRows.Close()
+	for seriesRows.Next() {
+		var p UsageOverviewPoint
+		if err := seriesRows.Scan(&p.Date, &p.Requests, &p.Errors, &p.Tokens, &p.Cost); err != nil {
+			return nil, err
+		}
+		ov.Series = append(ov.Series, p)
+	}
+
+	dist := func(col string) ([]UsageDistribution, error) {
+		rows, err := s.pool.Query(ctx,
+			`SELECT coalesce(`+col+`,'-'), count(*),
+			        coalesce(sum(input_tokens),0)+coalesce(sum(output_tokens),0)+coalesce(sum(cache_read_tokens),0)+coalesce(sum(cache_write_tokens),0),
+			        coalesce(sum(cost),0)::float8
+			 FROM usage_logs WHERE created_at > `+win+` GROUP BY 1 ORDER BY 2 DESC LIMIT 6`)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var out []UsageDistribution
+		for rows.Next() {
+			var d UsageDistribution
+			if err := rows.Scan(&d.Group, &d.Requests, &d.Tokens, &d.Cost); err != nil {
+				return nil, err
+			}
+			out = append(out, d)
+		}
+		return out, rows.Err()
+	}
+	if ov.ByModel, err = dist("model"); err != nil {
+		return nil, err
+	}
+	if ov.ByKey, err = dist(`(SELECT name FROM keys WHERE keys.id = usage_logs.key_id)`); err != nil {
+		return nil, err
+	}
+	return ov, nil
+}
+
 func (s *PgStore) QueryLogs(filter LogFilter) ([]UsageLog, error) {
 	ctx := context.Background()
 	query := `SELECT id, coalesce(key_id,0), coalesce(model,''), coalesce(upstream_model,''), coalesce(protocol,''),
@@ -442,6 +528,14 @@ func (s *PgStore) QueryLogs(filter LogFilter) ([]UsageLog, error) {
 	if filter.Status > 0 {
 		args = append(args, filter.Status)
 		query += fmt.Sprintf(" AND status = $%d", len(args))
+	}
+	if filter.RequestID != "" {
+		args = append(args, filter.RequestID)
+		query += fmt.Sprintf(" AND request_id = $%d", len(args))
+	}
+	if filter.Days > 0 {
+		args = append(args, filter.Days)
+		query += fmt.Sprintf(" AND created_at > now() - ($%d || ' days')::interval", len(args))
 	}
 	query += " ORDER BY created_at DESC, id DESC"
 	if filter.Limit > 0 {
@@ -587,4 +681,11 @@ func nullFloat(f float64) any {
 		return nil
 	}
 	return f
+}
+
+// TouchLastUsed 记录虚拟 key 最后使用时间（认证成功后旁路调用）。
+func (s *PgStore) TouchLastUsed(hash string) error {
+	_, err := s.pool.Exec(context.Background(),
+		`UPDATE keys SET last_used_at = now() WHERE key_hash = $1`, hash)
+	return err
 }

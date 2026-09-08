@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -91,6 +92,18 @@ func (s *MemStore) UpdateKey(k keys.Key) error {
 		old.AgentType = k.AgentType
 		old.QuotaLimit = k.QuotaLimit
 		old.AllowedModels = k.AllowedModels
+		old.ExpiresAt = k.ExpiresAt
+	}
+	return nil
+}
+
+// TouchLastUsed 记录虚拟 key 最后使用时间。
+func (s *MemStore) TouchLastUsed(hash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if k, ok := s.keys[hash]; ok {
+		now := time.Now()
+		k.LastUsedAt = &now
 	}
 	return nil
 }
@@ -134,6 +147,99 @@ func (s *MemStore) GetGrouped(by string, r TimeRange) ([]GroupedUsage, error) {
 	return nil, nil
 }
 
+// GetUsageOverview 从内存日志聚合（<=2 天小时粒度，其余天粒度）。
+func (s *MemStore) GetUsageOverview(days int) (*UsageOverview, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cutoff := time.Now().AddDate(0, 0, -days)
+	gran := 24 * time.Hour
+	if days <= 2 {
+		gran = time.Hour
+	}
+	ov := &UsageOverview{Series: []UsageOverviewPoint{}}
+	buckets := map[string]*UsageOverviewPoint{}
+	byModel := map[string]*UsageDistribution{}
+	byKey := map[string]*UsageDistribution{}
+
+	for _, l := range s.logs {
+		if !l.CreatedAt.IsZero() && l.CreatedAt.Before(cutoff) {
+			continue
+		}
+		ov.Summary.Requests++
+		tok := l.InputTokens + l.OutputTokens + l.CacheReadTokens + l.CacheWriteTokens
+		ov.Summary.InputTokens += l.InputTokens
+		ov.Summary.OutputTokens += l.OutputTokens
+		ov.Summary.CacheReadTokens += l.CacheReadTokens
+		ov.Summary.CacheWriteTokens += l.CacheWriteTokens
+		ov.Summary.Tokens += tok
+		ov.Summary.Cost += l.Cost
+		if l.Status >= 400 {
+			ov.Summary.Errors++
+		}
+		// 时间桶
+		trunc := l.CreatedAt.Truncate(gran)
+		key := trunc.Format("2006-01-02T15:04:05Z07:00")
+		b := buckets[key]
+		if b == nil {
+			b = &UsageOverviewPoint{Date: key}
+			buckets[key] = b
+		}
+		b.Requests++
+		b.Tokens += tok
+		b.Cost += l.Cost
+		if l.Status >= 400 {
+			b.Errors++
+		}
+		// 分布
+		md := byModel[l.Model]
+		if md == nil {
+			md = &UsageDistribution{Group: l.Model}
+			byModel[l.Model] = md
+		}
+		md.Requests++
+		md.Tokens += tok
+		md.Cost += l.Cost
+		kd := byKey[fmt.Sprint(l.KeyID)]
+		if kd == nil {
+			kd = &UsageDistribution{Group: fmt.Sprint(l.KeyID)}
+			byKey[fmt.Sprint(l.KeyID)] = kd
+		}
+		kd.Requests++
+		kd.Tokens += tok
+		kd.Cost += l.Cost
+	}
+	if ov.Summary.Requests > 0 {
+		ov.Summary.SuccessRate = float64(ov.Summary.Requests-ov.Summary.Errors) / float64(ov.Summary.Requests)
+	}
+	for _, b := range buckets {
+		ov.Series = append(ov.Series, *b)
+	}
+	sort.Slice(ov.Series, func(i, j int) bool { return ov.Series[i].Date < ov.Series[j].Date })
+	ov.ByModel = topDistributions(byModel)
+	ov.ByKey = topDistributions(byKey)
+	return ov, nil
+}
+
+// topDistributions Top5 + Other 归并（按请求数排序）。
+func topDistributions(m map[string]*UsageDistribution) []UsageDistribution {
+	all := make([]UsageDistribution, 0, len(m))
+	for _, d := range m {
+		all = append(all, *d)
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].Requests > all[j].Requests })
+	if len(all) <= 6 {
+		return all
+	}
+	top := all[:5]
+	other := UsageDistribution{Group: "其他"}
+	for _, d := range all[5:] {
+		other.Requests += d.Requests
+		other.Tokens += d.Tokens
+		other.Cost += d.Cost
+	}
+	return append(top, other)
+}
+
 func (s *MemStore) QueryLogs(filter LogFilter) ([]UsageLog, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -142,6 +248,29 @@ func (s *MemStore) QueryLogs(filter LogFilter) ([]UsageLog, error) {
 	if filter.Limit > 0 && filter.Limit < n {
 		n = filter.Limit
 	}
+	var filtered []UsageLog
+	for _, l := range s.logs {
+		if filter.KeyID > 0 && l.KeyID != filter.KeyID {
+			continue
+		}
+		if filter.Model != "" && l.Model != filter.Model {
+			continue
+		}
+		if filter.Status > 0 && l.Status != filter.Status {
+			continue
+		}
+		if filter.RequestID != "" && l.RequestID != filter.RequestID {
+			continue
+		}
+		if filter.Days > 0 && !l.CreatedAt.IsZero() && l.CreatedAt.Before(time.Now().AddDate(0, 0, -filter.Days)) {
+			continue
+		}
+		filtered = append(filtered, l)
+	}
+	s.logs = filtered // 无意义赋值防未用？——不，保留原 logs
+	_ = filtered
+	total := len(s.logs)
+	_ = total
 	out := make([]UsageLog, n)
 	copy(out, s.logs[len(s.logs)-n:])
 	// 倒序（最新在前，与 PG 查询语义一致）
