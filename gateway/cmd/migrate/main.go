@@ -1,8 +1,9 @@
 // migrate 一次性迁移工具：
-//   1) 给 channels 加 preset 列（JSONB 默认为 '{}'）。
-//   2) 给 channels 加 auth_mode 列（默认 'bearer'）。
-//   3) 对 DeepSeek/MiniMax 两条旧渠道灌默认端点+价格（仅 preset 为空时才写）。
-//   4) opencode（go）渠道设 auth_mode='x_api_key'（opencode.ai 只认 x-api-key）。
+//  1. 给 channels 加 preset 列（JSONB 默认为 '{}'）。
+//  2. 给 channels 加 auth_mode 列（默认 'bearer'）。
+//  3. 对 DeepSeek/MiniMax 两条旧渠道灌默认端点+价格（仅 preset 为空时才写）。
+//  4. opencode（go）渠道设 auth_mode='x_api_key'（opencode.ai 只认 x-api-key）。
+//
 // 部署新版本前手动跑一次。
 package main
 

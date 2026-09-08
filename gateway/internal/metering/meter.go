@@ -91,5 +91,5 @@ func (s *StreamAccumulator) Usage() Usage { return s.acc }
 
 type noopExtractor struct{}
 
-func (noopExtractor) ExtractNonStream([]byte) Usage            { return Usage{} }
+func (noopExtractor) ExtractNonStream([]byte) Usage           { return Usage{} }
 func (noopExtractor) ExtractStreamEvent([]byte) (Usage, bool) { return Usage{}, false }

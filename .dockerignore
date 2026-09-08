@@ -1,0 +1,16 @@
+# 版本控制
+.git
+.github
+
+# 文档与本地产物
+docs
+*.md
+gateway/bin
+gateway/config.yaml
+
+# 前端静态面板运行时挂载，不进镜像（体积小，进也行，但保持构建上下文干净）
+navpage
+
+# 其他
+node_modules
+*.log

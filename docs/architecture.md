@@ -64,12 +64,12 @@ LiteLLM 三条路都走不通，结论收敛到"自建"：
 
 **分层**：
 
-| 层       | 位置 | 内容                                                            |
-| -------- | ---- | --------------------------------------------------------------- |
-| 数据层   | A 机 | PostgreSQL（5 张表）                                            |
-| 服务层   | B 机 | Go 网关（透传 + 认证 + 计量 + 管理 API）                        |
-| 展示层   | B 机 | 静态面板（navpage/，由 Go 网关内置 FileServer serve）           |
-| 入口层   | B 机 | Caddy（TLS + 反代，唯一公网入口）                               |
+| 层     | 位置 | 内容                                                  |
+| ------ | ---- | ----------------------------------------------------- |
+| 数据层 | A 机 | PostgreSQL（5 张表）                                  |
+| 服务层 | B 机 | Go 网关（透传 + 认证 + 计量 + 管理 API）              |
+| 展示层 | B 机 | 静态面板（navpage/，由 Go 网关内置 FileServer serve） |
+| 入口层 | B 机 | Caddy（TLS + 反代，唯一公网入口）                     |
 
 ## 4. 组件设计
 
@@ -80,10 +80,20 @@ LiteLLM 三条路都走不通，结论收敛到"自建"：
 **包结构**（`gateway/`）：
 
 ```
-cmd/gateway/main.go   — 主入口（路由注册 + HTTP 透传 + 认证 + 计量落库 + 管理 API）
+cmd/gateway/main.go   — 主入口（依赖装配 + 路由注册 + 优雅停机）
+cmd/gateway/cli.go    — 子命令（keys set-upstream）
 cmd/migrate/          — schema 迁移（手动）
 cmd/dbclean/          — 用量日志清理（手动）
 internal/
+  gateway/            — 数据面（透传 + 计量落库）+ 管理面（key/渠道/用量 API）
+    gateway.go          — 依赖装配 + 路由注册
+    data.go             — handleModels / handleProxy（认证 → 路由 → 转发 → 计量）
+    admin.go            — 管理 API handlers
+  proxy/              — 上游请求构造 / Transport / SSE 转发
+    transport.go        — 显式连接池 + 分阶段超时（不读 *_proxy 环境变量）
+    request.go          — BuildRequest（认证/协议 header）+ ReplaceModel
+    relay.go            — SSE 逐行转发 + 计量旁路 feed
+  routing/            — 路由快照（原子发布；热更新不影响在途请求）
   config/             — config.yaml 解析 + 渠道/模型/路由/价格结构
     config.go         — Config/Channel/Model/Route/Pricing 类型
     preset.go         — 内置 provider preset（面板可视化）
@@ -151,11 +161,11 @@ mux.Handle("/", http.FileServer(http.Dir(staticDir)))  // 默认 ../navpage
 
 ### 4.3 Caddy（入口）
 
-| 路径     | 反代到              |
-| -------- | ------------------- |
+| 路径     | 反代到                                                    |
+| -------- | --------------------------------------------------------- |
 | `/`      | Go 网关内置 FileServer（或 Caddy `file_server` 直 serve） |
-| `/v1/*`  | Go 网关 `:8080`     |
-| `/api/*` | Go 网关 `:8080`     |
+| `/v1/*`  | Go 网关 `:8080`                                           |
+| `/api/*` | Go 网关 `:8080`                                           |
 
 ### 4.4 PostgreSQL（数据层）
 
@@ -184,21 +194,33 @@ A 机 PG，Go 网关内网连接。schema 见 §7。**5 张表**：channels / mo
 channels:
   - provider: deepseek
     name: DeepSeek
-    balance_type: balance        # balance(余额) | quota(余量百分比)
+    balance_type: balance # balance(余额) | quota(余量百分比)
     balance_url: https://api.deepseek.com/user/balance
     models_url: https://api.deepseek.com/models
-    auth_mode: bearer            # bearer(默认) | x_api_key
+    auth_mode: bearer # bearer(默认) | x_api_key
     models:
-      - name: deepseek-v4-pro    # 客户端 model 名（直白，无三段式）
-        routes:                  # 多协议路由（纯透传）
+      - name: deepseek-v4-pro # 客户端 model 名（直白，无三段式）
+        routes: # 多协议路由（纯透传）
           "/v1/messages":
-            { upstream: "https://api.deepseek.com/anthropic/v1/messages", model: "deepseek-v4-pro", usage: anthropic }
+            {
+              upstream: "https://api.deepseek.com/anthropic/v1/messages",
+              model: "deepseek-v4-pro",
+              usage: anthropic,
+            }
           "/v1/responses":
-            { upstream: "https://api.deepseek.com/responses",              model: "deepseek-v4-pro", usage: responses }
+            {
+              upstream: "https://api.deepseek.com/responses",
+              model: "deepseek-v4-pro",
+              usage: responses,
+            }
           "/v1/chat/completions":
-            { upstream: "https://api.deepseek.com/v1/chat/completions",    model: "deepseek-v4-pro", usage: chat_completions }
+            {
+              upstream: "https://api.deepseek.com/v1/chat/completions",
+              model: "deepseek-v4-pro",
+              usage: chat_completions,
+            }
         pricing:
-          input_per_m: 3          # 元/M
+          input_per_m: 3 # 元/M
           output_per_m: 6
           cache_read_per_m: 0.025
           cache_write_per_m: 3
@@ -277,12 +299,12 @@ type UsageExtractor interface {
 - **① pre-call 估 input**：`metering.EstimateInputTokens(body)` 字符/3，兜底流式中断也不丢 input 账。
 - **② 转发中监听**：`bufio.Scanner` 逐行 `Write`+`Flush` 透传，同时 `parseUsageEvent` 识别 usage 事件：
 
-  | 协议             | 流式 usage 事件                                      | 内容                                    |
-  | ---------------- | ---------------------------------------------------- | --------------------------------------- |
-  | Anthropic        | `message_start`                                      | input_tokens + cache                    |
-  | Anthropic        | `message_delta`（最后）                              | output_tokens                           |
-  | Responses        | `response.completed` / `response.incomplete`（最后）| 完整 usage（截断时是 `incomplete`）     |
-  | chat_completions | 默认不带，需 `stream_options.include_usage`          | 流式只记 input 估算                     |
+  | 协议             | 流式 usage 事件                                      | 内容                                |
+  | ---------------- | ---------------------------------------------------- | ----------------------------------- |
+  | Anthropic        | `message_start`                                      | input_tokens + cache                |
+  | Anthropic        | `message_delta`（最后）                              | output_tokens                       |
+  | Responses        | `response.completed` / `response.incomplete`（最后） | 完整 usage（截断时是 `incomplete`） |
+  | chat_completions | 默认不带，需 `stream_options.include_usage`          | 流式只记 input 估算                 |
 
   （anthropic 拆两个事件拼；responses 读最后一个事件，`completed` 和 `incomplete` 都带 usage。）
 
@@ -454,14 +476,14 @@ CREATE TABLE models (
 
 ## 11. 代码量
 
-| 模块                            | 实际行数           |
-| ------------------------------- | ------------------ |
-| `cmd/gateway/main.go`           | 1261               |
-| `internal/store/pg.go`          | 494                |
-| `internal/metering/meter.go`    | 95                 |
-| `internal/metering/usage_*.go`  | 3 个 extractor     |
-| `internal/keys/keys.go`         | 153                |
-| `internal/keys/crypto.go`       | 72                 |
-| `internal/config/config.go`     | 104                |
-| `internal/store/store.go`       | 133（接口定义）    |
-| `cmd/migrate` + `cmd/dbclean`   | 维护工具，按需     |
+| 模块                           | 实际行数        |
+| ------------------------------ | --------------- |
+| `cmd/gateway/main.go`          | 1261            |
+| `internal/store/pg.go`         | 494             |
+| `internal/metering/meter.go`   | 95              |
+| `internal/metering/usage_*.go` | 3 个 extractor  |
+| `internal/keys/keys.go`        | 153             |
+| `internal/keys/crypto.go`      | 72              |
+| `internal/config/config.go`    | 104             |
+| `internal/store/store.go`      | 133（接口定义） |
+| `cmd/migrate` + `cmd/dbclean`  | 维护工具，按需  |

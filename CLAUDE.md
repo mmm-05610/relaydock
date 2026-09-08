@@ -34,7 +34,10 @@
 ## 代码结构
 
 - `gateway/` — 自建 Go 网关
-  - `cmd/gateway/main.go` — 主入口（HTTP 透传 + 认证 + 计量落库）
+  - `cmd/gateway/main.go` — 主入口（依赖装配 + 路由注册 + 优雅停机）；`cli.go` 子命令（set-upstream）
+  - `internal/gateway/` — 数据面（透传 + 计量落库）+ 管理面（key/渠道/用量 API）
+  - `internal/proxy/` — 上游请求构造、Transport（显式连接池 + 分阶段超时）、SSE 转发
+  - `internal/routing/` — 路由快照（原子发布，热更新不影响在途请求）
   - `internal/store/` — PostgreSQL 存储（pg.go）/ 内存（mem.go）
   - `internal/metering/` — 计量（usage_anthropic / usage_chat / usage_responses + fallback）
   - `internal/keys/` — virtual key 管理 + 认证（SHA-256 查表）
@@ -42,6 +45,7 @@
   - `cmd/migrate` / `cmd/dbclean` — 迁移 / 清理
 - `navpage/` — 导航页 + 用量面板（design.md 是设计规范）
 - `config.yaml` — 渠道配置（provider → models → routes → pricing）
+- CI：`.github/workflows/ci.yml`（gofmt + vet + test -race + build）；`Dockerfile`（单二进制镜像）
 
 ## 部署（双服务器）
 

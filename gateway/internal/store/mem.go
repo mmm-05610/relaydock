@@ -128,9 +128,9 @@ func (s *MemStore) QueryLogs(filter LogFilter) ([]UsageLog, error) {
 func (s *MemStore) LoadChannels() ([]config.Channel, error) {
 	return nil, nil
 }
-func (s *MemStore) CreateChannel(ch config.Channel) error { return nil }
-func (s *MemStore) UpdateChannel(ch config.Channel) error { return nil }
-func (s *MemStore) DeleteChannel(provider string) error    { return nil }
+func (s *MemStore) CreateChannel(ch config.Channel) error             { return nil }
+func (s *MemStore) UpdateChannel(ch config.Channel) error             { return nil }
+func (s *MemStore) DeleteChannel(provider string) error               { return nil }
 func (s *MemStore) CreateModel(provider string, m config.Model) error { return nil }
 func (s *MemStore) UpdateModel(provider string, m config.Model) error { return nil }
-func (s *MemStore) DeleteModel(provider, modelName string) error       { return nil }
+func (s *MemStore) DeleteModel(provider, modelName string) error      { return nil }
