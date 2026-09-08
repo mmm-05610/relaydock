@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS usage_logs (
   error            TEXT,                  -- 失败原因（空 = 成功）
   request_id       TEXT,                  -- 客户端请求 ID
   unmetered        BOOLEAN NOT NULL DEFAULT FALSE,
+  channel_id       BIGINT,                -- 最终承载响应的渠道
+  account_id       BIGINT,                -- 最终承载响应的上游账号（隐式账号为 NULL）
+  attempts         INTEGER NOT NULL DEFAULT 1,  -- 上游尝试次数（含首次）
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_usage_key_time ON usage_logs (key_id, created_at DESC);
@@ -71,3 +74,26 @@ CREATE TABLE IF NOT EXISTS models (
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(channel_id, name)
 );
+
+-- 上游账号：渠道下的独立凭据 + 并发容量（docs/design-upstream-account-pool.md §2.1）
+-- 兼容策略：渠道没有账号时回退 upstream_keys 作为隐式 default 账号
+CREATE TABLE IF NOT EXISTS upstream_accounts (
+  id               BIGSERIAL PRIMARY KEY,
+  channel_id       BIGINT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  name             TEXT NOT NULL,
+  encrypted_key    BYTEA NOT NULL,         -- AES-256-GCM 密文
+  key_fingerprint  TEXT NOT NULL,          -- HMAC（服务端密钥参与），仅去重/日志关联
+  max_concurrency  INTEGER NOT NULL DEFAULT 0,  -- 0 = 不限
+  enabled          BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(channel_id, name),
+  UNIQUE(channel_id, key_fingerprint),
+  CHECK (max_concurrency >= 0)
+);
+CREATE INDEX IF NOT EXISTS idx_upstream_accounts_channel ON upstream_accounts(channel_id) WHERE enabled = TRUE;
+
+-- 既有库增量迁移（幂等）
+ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS channel_id BIGINT;
+ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS account_id BIGINT;
+ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 1;

@@ -52,9 +52,9 @@ func setupGatewayTest(t *testing.T, channels []config.Channel, allowedModels str
 			upstreamKeys[ch.Provider] = "upstream-key-" + ch.Provider
 		}
 	}
-	keyMgr := keys.NewManager(store.NewMemStore())
-	testGW = New(channels, upstreamKeys, keyMgr, nil, "", "")
-
+	mem := store.NewMemStore()
+	keyMgr := keys.NewManager(mem)
+	testGW = New(channels, upstreamKeys, keyMgr, mem, "", "")
 	raw, err := keyMgr.CreateKeyWithModels("test-key", "test-owner", "test-agent", 0, allowedModels)
 	if err != nil {
 		t.Fatalf("create virtual key: %v", err)

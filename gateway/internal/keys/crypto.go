@@ -3,6 +3,7 @@ package keys
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -14,6 +15,14 @@ import (
 func SHA256Hash(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
+}
+
+// Fingerprint 服务端密钥参与的 HMAC-SHA256 指纹（取前 16 字节 hex）。
+// 用于账号 key 去重和日志关联，不可反推 key 本身。
+func Fingerprint(key string, masterKey []byte) string {
+	mac := hmac.New(sha256.New, masterKey)
+	mac.Write([]byte(key))
+	return hex.EncodeToString(mac.Sum(nil))[:32]
 }
 
 // GenerateKey 生成 gw- 前缀的虚拟 key（32 字节随机熵）。

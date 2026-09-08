@@ -13,7 +13,9 @@ type Config struct {
 }
 
 // Channel 一个上游供应商渠道，含余额查询配置 + 支持的模型。
+// ID 由 PG 生成（LoadChannels 回填），config.yaml 种子路径为 0。
 type Channel struct {
+	ID          int64   `yaml:"-" json:"id"`
 	Provider    string  `yaml:"provider" json:"provider"`
 	Name        string  `yaml:"name" json:"name"`
 	BalanceType string  `yaml:"balance_type" json:"balance_type"` // balance(余额) | quota(余量百分比)

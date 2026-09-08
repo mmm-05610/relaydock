@@ -66,7 +66,7 @@ LiteLLM 三条路都走不通，结论收敛到"自建"：
 
 | 层     | 位置 | 内容                                                  |
 | ------ | ---- | ----------------------------------------------------- |
-| 数据层 | A 机 | PostgreSQL（5 张表）                                  |
+| 数据层 | A 机 | PostgreSQL（6 张表）                                  |
 | 服务层 | B 机 | Go 网关（透传 + 认证 + 计量 + 管理 API）              |
 | 展示层 | B 机 | 静态面板（navpage/，由 Go 网关内置 FileServer serve） |
 | 入口层 | B 机 | Caddy（TLS + 反代，唯一公网入口）                     |
@@ -85,14 +85,20 @@ cmd/gateway/cli.go    — 子命令（keys set-upstream）
 cmd/migrate/          — schema 迁移（手动）
 cmd/dbclean/          — 用量日志清理（手动）
 internal/
-  gateway/            — 数据面（透传 + 计量落库）+ 管理面（key/渠道/用量 API）
-    gateway.go          — 依赖装配 + 路由注册
+  gateway/            — 数据面（透传 + 计量落库）+ 管理面（key/渠道/账号/用量 API）
+    gateway.go          — 依赖装配 + 路由注册 + 快照重建
     data.go             — handleModels / handleProxy（认证 → 路由 → 转发 → 计量）
-    admin.go            — 管理 API handlers
+    attempts.go         — 账号池执行路径（failover / 本地 429/503 / 归因）
+    accounts.go         — 账号管理 API（CRUD + test + 运行时摘要）
+    admin.go            — 其余管理 API handlers
   proxy/              — 上游请求构造 / Transport / SSE 转发
     transport.go        — 显式连接池 + 分阶段超时（不读 *_proxy 环境变量）
     request.go          — BuildRequest（认证/协议 header）+ ReplaceModel
     relay.go            — SSE 逐行转发 + 计量旁路 feed
+  pool/               — 上游账号池
+    state.go            — AccountSpec/State/Ref + 原子 tryAcquire + 幂等 Lease
+    pool.go             — 选择算法（占用比例 + 轮换）+ Reconcile 热更新对账
+    classify.go         — 保守错误分类（429/401/403/402 换账号；5xx/网络错误不换）
   routing/            — 路由快照（原子发布；热更新不影响在途请求）
   config/             — config.yaml 解析 + 渠道/模型/路由/价格结构
     config.go         — Config/Channel/Model/Route/Pricing 类型
@@ -103,7 +109,7 @@ internal/
     mem.go            — 内存实现（开发 / 无 DATABASE_URL）
   keys/               — key 管理
     keys.go           — Manager（虚拟 key 签发/吊销/轮换/额度）
-    crypto.go         — AES-256-GCM 加解密（master key）
+    crypto.go         — AES-256-GCM 加解密（master key）+ HMAC 指纹
   metering/           — 计量
     meter.go          — Meter 编排 + Usage/Pricing/Cost
     usage_anthropic.go   — anthropic 协议 extractor
@@ -143,6 +149,11 @@ mux.HandleFunc("GET  /api/channels/{provider}/remote-models",handleRemoteModels)
 mux.HandleFunc("POST /api/channels/{provider}/models",       handleCreateModel)
 mux.HandleFunc("PUT  /api/channels/{provider}/models/{name}",handleUpdateModel)
 mux.HandleFunc("DELETE /api/channels/{provider}/models/{name}",handleDeleteModel)
+mux.HandleFunc("GET  /api/channels/{provider}/accounts",     handleListAccounts)
+mux.HandleFunc("POST /api/channels/{provider}/accounts",     handleCreateAccount)
+mux.HandleFunc("PUT  /api/channels/{provider}/accounts/{id}",handleUpdateAccount)
+mux.HandleFunc("DELETE /api/channels/{provider}/accounts/{id}",handleDeleteAccount)
+mux.HandleFunc("POST /api/channels/{provider}/accounts/{id}/test",handleTestAccount)
 mux.HandleFunc("GET  /api/settings/upstream",      handleUpstreamStatus)
 mux.HandleFunc("POST /api/settings/password",      handleUpdatePassword)
 mux.HandleFunc("GET  /api/upstream/balance",       handleUpstreamBalance)
@@ -169,7 +180,21 @@ mux.Handle("/", http.FileServer(http.Dir(staticDir)))  // 默认 ../navpage
 
 ### 4.4 PostgreSQL（数据层）
 
-A 机 PG，Go 网关内网连接。schema 见 §7。**5 张表**：channels / models / upstream_keys / keys / usage_logs。
+A 机 PG，Go 网关内网连接。schema 见 §7。**6 张表**：channels / models / upstream_keys / upstream_accounts / keys / usage_logs。
+
+### 4.5 上游账号池（多账号 failover）
+
+设计见 [design-upstream-account-pool.md](design-upstream-account-pool.md)，第一版已实现：
+
+- `upstream_accounts` 表：渠道下多份独立凭据（AES-GCM 密文 + HMAC 指纹去重）+ 每账号 `max_concurrency`；
+- 渠道**没有显式账号时走 `upstream_keys` 隐式单 key 路径，行为与多账号功能上线前完全一致**（兼容红线）；
+- 选择：按占用比例（inflight/max_concurrency）最低优先，同分轮换；检查与递增在同一把锁内（`tryAcquire`）；
+- **原子 Acquire + 幂等 Lease**（`sync.Once` 归还，inflight 永不为负、不超上限）；
+- 保守 failover：只有**账号级 429 / 401 / 403 / 402** 在客户端响应未提交时换账号（429 按 `Retry-After` 冷却 + 抖动）；5xx、网络错误结果未知，**不重试不惩罚**；
+- 全部满槽 → 本地 429（`Retry-After: 5`）；全部冷却/禁用 → 本地 503；稳定 JSON 错误体；
+- 配置热更新经快照原子发布，在途请求持有旧 `AccountRef` 正常归还（`-race` 验证）；
+- 归因：`usage_logs` 增加 `channel_id` / `account_id` / `attempts`；
+- 管理 API：`GET/POST /api/channels/{p}/accounts`、`PUT/DELETE .../accounts/{id}`、`POST .../accounts/{id}/test`（响应含 inflight / cooling 运行时摘要，不含凭据）。
 
 ## 5. 协议路由（协议无关 + 渠道管理）
 
@@ -332,7 +357,7 @@ cost = input/1e6 * input_per_m
 - 面板调用 `POST/PUT/DELETE /api/channels/*` 或 `.../models/*` → 写 PG → `reloadChannels()` 全量重读 `channels` 表到 `cfg.Channels`。
 - 内存读写无锁，热更新期间可能出现「正在执行的请求路由到旧配置」的瞬时不一致（个人用，规模小，未做细粒度同步）。
 
-## 7. 数据模型（PG schema，5 张表）
+## 7. 数据模型（PG schema，6 张表）
 
 ```sql
 -- 上游真 key：AES-256-GCM 密文，master key 解密
@@ -374,9 +399,27 @@ CREATE TABLE usage_logs (
   error             TEXT,                  -- 失败原因（空 = 成功）
   request_id        TEXT,                  -- 客户端请求 ID（用于排错）
   unmetered         BOOLEAN NOT NULL DEFAULT FALSE,  -- 没拿到 usage、退估算的标记
+  channel_id        BIGINT,                -- 最终承载响应的渠道
+  account_id        BIGINT,                -- 最终承载响应的上游账号（隐式账号 NULL）
+  attempts          INTEGER NOT NULL DEFAULT 1,  -- 上游尝试次数
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_usage_key_time ON usage_logs (key_id, created_at DESC);
+
+-- 上游账号（渠道下的独立凭据 + 并发容量，docs/design-upstream-account-pool.md）
+CREATE TABLE upstream_accounts (
+  id               BIGSERIAL PRIMARY KEY,
+  channel_id       BIGINT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  name             TEXT NOT NULL,
+  encrypted_key    BYTEA NOT NULL,         -- AES-256-GCM 密文
+  key_fingerprint  TEXT NOT NULL,          -- HMAC（服务端密钥参与），仅去重/日志关联
+  max_concurrency  INTEGER NOT NULL DEFAULT 0,  -- 0 = 不限
+  enabled          BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(channel_id, name),
+  UNIQUE(channel_id, key_fingerprint)
+);
 
 -- 渠道（上游供应商）
 CREATE TABLE channels (

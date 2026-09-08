@@ -12,6 +12,7 @@ type MemStore struct {
 	mu       sync.RWMutex
 	keys     map[string]*keys.Key
 	upstream map[string][]byte
+	logs     []UsageLog
 	nextID   int64
 }
 
@@ -102,7 +103,10 @@ func (s *MemStore) GetUpstreamKey(provider string) ([]byte, error) {
 }
 
 func (s *MemStore) InsertUsageLog(log UsageLog) error {
-	return nil // 内存模式不落库（开发用）
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.logs = append(s.logs, log)
+	return nil
 }
 
 func (s *MemStore) GetUsageStats() (UsageStats, error) {
@@ -122,7 +126,20 @@ func (s *MemStore) GetGrouped(by string, r TimeRange) ([]GroupedUsage, error) {
 }
 
 func (s *MemStore) QueryLogs(filter LogFilter) ([]UsageLog, error) {
-	return nil, nil
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	// 返回最新的 filter.Limit 条（简易实现，开发/测试用）
+	n := len(s.logs)
+	if filter.Limit > 0 && filter.Limit < n {
+		n = filter.Limit
+	}
+	out := make([]UsageLog, n)
+	copy(out, s.logs[len(s.logs)-n:])
+	// 倒序（最新在前，与 PG 查询语义一致）
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
 }
 
 func (s *MemStore) LoadChannels() ([]config.Channel, error) {
@@ -134,3 +151,8 @@ func (s *MemStore) DeleteChannel(provider string) error               { return n
 func (s *MemStore) CreateModel(provider string, m config.Model) error { return nil }
 func (s *MemStore) UpdateModel(provider string, m config.Model) error { return nil }
 func (s *MemStore) DeleteModel(provider, modelName string) error      { return nil }
+
+func (s *MemStore) ListUpstreamAccounts() ([]UpstreamAccount, error) { return nil, nil }
+func (s *MemStore) CreateUpstreamAccount(a *UpstreamAccount) error   { return nil }
+func (s *MemStore) UpdateUpstreamAccount(a UpstreamAccount) error    { return nil }
+func (s *MemStore) DeleteUpstreamAccount(id int64) error             { return nil }

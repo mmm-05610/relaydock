@@ -23,7 +23,29 @@ type UsageLog struct {
 	Error            string
 	RequestID        string
 	Unmetered        bool
+	ChannelID        int64 // 最终承载响应的渠道（0 = 内存模式未归因）
+	AccountID        int64 // 最终承载响应的上游账号（<=0 = 隐式账号，落库为 NULL）
+	Attempts         int   // 上游尝试次数（含首次）
 	CreatedAt        time.Time
+}
+
+// UpstreamAccount 一份上游账号（渠道下的独立凭据 + 并发容量），对应 upstream_accounts 表。
+type UpstreamAccount struct {
+	ID             int64
+	ChannelID      int64
+	Name           string
+	EncryptedKey   []byte
+	KeyFingerprint string
+	MaxConcurrency int64 // 0 = 不限
+	Enabled        bool
+}
+
+// AccountStore 上游账号的增删改查（凭据密文由调用方加密）。
+type AccountStore interface {
+	ListUpstreamAccounts() ([]UpstreamAccount, error)
+	CreateUpstreamAccount(a *UpstreamAccount) error // 回填 a.ID
+	UpdateUpstreamAccount(a UpstreamAccount) error
+	DeleteUpstreamAccount(id int64) error
 }
 
 // UpstreamStore 上游 key 的加密存取。

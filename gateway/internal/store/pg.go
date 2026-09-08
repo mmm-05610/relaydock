@@ -128,15 +128,63 @@ func (s *PgStore) GetUpstreamKey(provider string) ([]byte, error) {
 	return encrypted, nil
 }
 
+// --- AccountStore 实现 ---
+
+func (s *PgStore) ListUpstreamAccounts() ([]UpstreamAccount, error) {
+	rows, err := s.pool.Query(context.Background(),
+		`SELECT id, channel_id, name, encrypted_key, key_fingerprint, max_concurrency, enabled FROM upstream_accounts ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UpstreamAccount
+	for rows.Next() {
+		var a UpstreamAccount
+		if err := rows.Scan(&a.ID, &a.ChannelID, &a.Name, &a.EncryptedKey, &a.KeyFingerprint, &a.MaxConcurrency, &a.Enabled); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *PgStore) CreateUpstreamAccount(a *UpstreamAccount) error {
+	return s.pool.QueryRow(context.Background(),
+		`INSERT INTO upstream_accounts (channel_id, name, encrypted_key, key_fingerprint, max_concurrency, enabled)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		a.ChannelID, a.Name, a.EncryptedKey, a.KeyFingerprint, a.MaxConcurrency, a.Enabled).Scan(&a.ID)
+}
+
+func (s *PgStore) UpdateUpstreamAccount(a UpstreamAccount) error {
+	_, err := s.pool.Exec(context.Background(),
+		`UPDATE upstream_accounts SET name=$1, encrypted_key=$2, key_fingerprint=$3, max_concurrency=$4, enabled=$5, updated_at=now() WHERE id=$6`,
+		a.Name, a.EncryptedKey, a.KeyFingerprint, a.MaxConcurrency, a.Enabled, a.ID)
+	return err
+}
+
+func (s *PgStore) DeleteUpstreamAccount(id int64) error {
+	_, err := s.pool.Exec(context.Background(), `DELETE FROM upstream_accounts WHERE id=$1`, id)
+	return err
+}
+
 // --- UsageStore 实现 ---
 
 func (s *PgStore) InsertUsageLog(log UsageLog) error {
 	_, err := s.pool.Exec(context.Background(),
-		`INSERT INTO usage_logs (key_id, model, upstream_model, protocol, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, latency_ms, status, error, request_id, unmetered)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+		`INSERT INTO usage_logs (key_id, model, upstream_model, protocol, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, latency_ms, status, error, request_id, unmetered, channel_id, account_id, attempts)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
 		nullInt64(log.KeyID), log.Model, log.UpstreamModel, log.Protocol, log.InputTokens, log.OutputTokens,
-		log.CacheReadTokens, log.CacheWriteTokens, log.Cost, log.LatencyMs, log.Status, log.Error, log.RequestID, log.Unmetered)
+		log.CacheReadTokens, log.CacheWriteTokens, log.Cost, log.LatencyMs, log.Status, log.Error, log.RequestID, log.Unmetered,
+		nullInt64(log.ChannelID), nullInt64(log.AccountID), maxInt(log.Attempts, 1))
 	return err
+}
+
+// maxInt 返回两者较大值。
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // nullInt64 0 值存 NULL（如认证失败的 key_id=0）。
@@ -393,6 +441,7 @@ func (s *PgStore) LoadChannels() ([]config.Channel, error) {
 		if err := rows.Scan(&id, &ch.Provider, &ch.Name, &ch.BalanceType, &ch.BalanceURL, &ch.ModelsURL, &ch.Enabled, &presetJSON, &ch.AuthMode); err != nil {
 			return nil, err
 		}
+		ch.ID = id
 		_ = json.Unmarshal(presetJSON, &ch.Preset)
 		models, err := s.loadModels(ctx, id, ch.Provider)
 		if err != nil {

@@ -85,6 +85,14 @@ func main() {
 
 	g := gateway.New(channels, upstreamKeys, keyMgr, db, panelPassword, os.Getenv("GATEWAY_MASTER_KEY"))
 
+	// PG 模式：从库加载渠道（含 ID）+ 上游账号池，发布初始快照
+	if db != nil {
+		if err := g.RebuildSnapshot(); err != nil {
+			log.Fatalf("rebuild snapshot: %v", err)
+		}
+		log.Printf("snapshot rebuilt (channels + accounts)")
+	}
+
 	staticDir := os.Getenv("STATIC_DIR")
 	if staticDir == "" {
 		staticDir = "../navpage"

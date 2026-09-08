@@ -47,8 +47,9 @@ func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleProxy 协议无关透传：认证 -> 路由 -> 换上游 -> 原样转发。成功失败都落库。
+// 渠道配置了显式账号时走账号池路径（failover），否则走隐式单 key 路径（兼容现状）。
 func (g *Gateway) handleProxy(w http.ResponseWriter, r *http.Request) {
-	rec := store.UsageLog{}
+	rec := store.UsageLog{Attempts: 1}
 	start := time.Now()
 	var authKey *keys.Key
 	loggable := false // 只有解析到真实模型路由的请求才落库（过滤 /v1/models、count_tokens 等噪声）
@@ -104,7 +105,8 @@ func (g *Gateway) handleProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "model disabled", http.StatusNotFound)
 		return
 	}
-	if ch := snap.FindChannel(m.Provider); ch != nil && !ch.Enabled {
+	ch := snap.FindChannel(m.Provider)
+	if ch != nil && !ch.Enabled {
 		rec.Status = http.StatusNotFound
 		rec.Error = "channel disabled"
 		http.Error(w, "channel disabled", http.StatusNotFound)
@@ -129,6 +131,17 @@ func (g *Gateway) handleProxy(w http.ResponseWriter, r *http.Request) {
 	rec.UpstreamModel = route.Model
 	rec.Protocol = route.Usage
 	loggable = true // 真实模型请求，落库
+	if ch != nil {
+		rec.ChannelID = ch.ID
+	}
+
+	// 显式账号池路径（有账号才走 failover；否则保持单 key 兼容行为）
+	if ch != nil {
+		if refs := snap.AccountsFor(ch); len(refs) > 0 {
+			g.proxyWithAccounts(w, r, m, ch, route, refs, body, model, &rec)
+			return
+		}
+	}
 
 	key := snap.UpstreamKey(m.Provider)
 	if key == "" {
@@ -142,11 +155,9 @@ func (g *Gateway) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if route.Model != model {
 		body = proxy.ReplaceModel(body, route.Model)
 	}
-
-	// 客户端 context 绑定上游请求：客户端断开时上游请求同步取消
 	upReq, err := proxy.BuildRequest(r.Context(), r.Method, body, r.Header, proxy.Target{
 		URL:      route.Upstream,
-		AuthMode: snap.FindChannel(m.Provider).AuthMode,
+		AuthMode: channelAuthMode(ch),
 		Key:      key,
 		Protocol: route.Usage,
 	})
@@ -165,7 +176,12 @@ func (g *Gateway) handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	g.relayUpstream(w, resp, m, route, body, &rec)
+}
 
+// relayUpstream 把上游响应转发给客户端并填充计量字段（不关闭 resp.Body，调用方管理）。
+// body 是发给上游的最终请求体（流式中断时 input 估算的输入）。
+func (g *Gateway) relayUpstream(w http.ResponseWriter, resp *http.Response, m *config.Model, route *config.Route, body []byte, rec *store.UsageLog) {
 	rec.Status = resp.StatusCode
 
 	// 透传响应 header
@@ -192,7 +208,7 @@ func (g *Gateway) handleProxy(w http.ResponseWriter, r *http.Request) {
 		if usage.InputTokens == 0 && usage.OutputTokens == 0 {
 			usage.InputTokens = estInput // 流式没拿到 usage（如 chat_completions），退估算
 		}
-		fillMetering(&rec, m, usage)
+		fillMetering(rec, m, usage)
 		return
 	}
 
@@ -202,13 +218,13 @@ func (g *Gateway) handleProxy(w http.ResponseWriter, r *http.Request) {
 		w.Write(respBody)
 	}
 	rec.RequestID = extractRequestID(respBody)
-	fillMetering(&rec, m, g.Meter.MeterNonStream(route.Usage, respBody))
+	fillMetering(rec, m, g.Meter.MeterNonStream(route.Usage, respBody))
 }
 
 // recordUsage 落库用量 + 累加额度（旁路，失败只 log 不阻断）。
 func (g *Gateway) recordUsage(rec store.UsageLog, authKey *keys.Key) {
-	log.Printf("usage model=%s proto=%s status=%d in=%d out=%d cost=$%.6f err=%s",
-		rec.Model, rec.Protocol, rec.Status, rec.InputTokens, rec.OutputTokens, rec.Cost, rec.Error)
+	log.Printf("usage model=%s proto=%s status=%d in=%d out=%d cost=$%.6f attempts=%d err=%s",
+		rec.Model, rec.Protocol, rec.Status, rec.InputTokens, rec.OutputTokens, rec.Cost, rec.Attempts, rec.Error)
 	if g.DB == nil {
 		return
 	}
@@ -235,6 +251,14 @@ func fillMetering(rec *store.UsageLog, m *config.Model, usage metering.Usage) {
 		CacheWritePerM: m.Pricing.CacheWritePerM,
 	})
 	rec.Unmetered = usage.InputTokens == 0 && usage.OutputTokens == 0
+}
+
+// channelAuthMode 渠道可为 nil（config.yaml 只读路径），此时按默认 bearer。
+func channelAuthMode(ch *config.Channel) string {
+	if ch == nil {
+		return ""
+	}
+	return ch.AuthMode
 }
 
 // extractModel 从请求 body 提取 model 字段。
