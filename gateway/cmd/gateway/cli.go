@@ -298,10 +298,12 @@ func runMergeChannels(args []string) {
 
 	var target *config.Channel
 	var sourceChs []*config.Channel
+	var originalTargetModels []config.Model
 	for i := range channels {
 		switch {
 		case channels[i].Provider == into:
 			target = &channels[i]
+			originalTargetModels = channels[i].Models
 		default:
 			for _, sp := range sourceList {
 				if channels[i].Provider == sp {
@@ -398,6 +400,17 @@ func runMergeChannels(args []string) {
 	target.Enabled = true
 	if err := backing.UpdateChannel(*target); err != nil {
 		log.Fatalf("update target: %v", err)
+	}
+	// 模型显式同步（UpdateChannel 只更新渠道行；先删原模型再建合并结果）
+	for _, m := range originalTargetModels {
+		if err := backing.DeleteModel(into, m.Name); err != nil {
+			log.Printf("delete old model %s: %v", m.Name, err)
+		}
+	}
+	for _, m := range final {
+		if err := backing.CreateModel(into, m); err != nil {
+			log.Fatalf("create model %s: %v", m.Name, err)
+		}
 	}
 	fmt.Printf("  目标 %s 模型合并后: %d 个\n", into, len(final))
 

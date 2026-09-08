@@ -705,19 +705,10 @@ func (s *SqliteStore) insertModels(channelID int64, models []config.Model) error
 
 func (s *SqliteStore) UpdateChannel(ch config.Channel) error {
 	presetJSON, _ := json.Marshal(ch.Preset)
-	if _, err := s.db.Exec(
+	_, err := s.db.Exec(
 		`UPDATE channels SET name=?, balance_type=?, balance_url=?, models_url=?, enabled=?, preset=?, auth_mode=? WHERE provider=?`,
-		ch.Name, ch.BalanceType, ch.BalanceURL, ch.ModelsURL, ch.Enabled, presetJSON, ch.AuthMode, ch.Provider); err != nil {
-		return err
-	}
-	var id int64
-	if err := s.db.QueryRow(`SELECT id FROM channels WHERE provider=?`, ch.Provider).Scan(&id); err != nil {
-		return err
-	}
-	if _, err := s.db.Exec(`DELETE FROM models WHERE channel_id=?`, id); err != nil {
-		return err
-	}
-	return s.insertModels(id, ch.Models)
+		ch.Name, ch.BalanceType, ch.BalanceURL, ch.ModelsURL, ch.Enabled, presetJSON, ch.AuthMode, ch.Provider)
+	return err
 }
 
 func (s *SqliteStore) DeleteChannel(provider string) error {
