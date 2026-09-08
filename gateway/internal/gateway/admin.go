@@ -168,8 +168,14 @@ func (g *Gateway) handleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	agentType := req.AgentType
+	if agentType == "" {
+		if cur, err := g.KeyMgr.GetKey(hash); err == nil && cur != nil {
+			agentType = cur.AgentType // 未提供时保留原值（字段已从 UI 移除，仅兼容旧数据）
+		}
+	}
 	if err := g.KeyMgr.UpdateKey(keys.Key{
-		KeyHash: hash, Name: req.Name, Owner: req.Owner, AgentType: req.AgentType,
+		KeyHash: hash, Name: req.Name, Owner: req.Owner, AgentType: agentType,
 		QuotaLimit: req.Quota, AllowedModels: req.AllowedModels, ExpiresAt: exp,
 	}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

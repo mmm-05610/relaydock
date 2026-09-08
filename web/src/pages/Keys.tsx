@@ -86,7 +86,7 @@ export default function Keys() {
           columns={[
             { title: '名称', dataIndex: 'name', width: 140 },
             { title: '归属', dataIndex: 'owner', width: 110, render: (v: string) => v || '-' },
-            { title: 'Agent', dataIndex: 'agent_type', width: 110, render: (v: string) => v || '-' },
+
             {
               title: '额度（¥ 等效成本）',
               width: 190,
@@ -204,7 +204,7 @@ export default function Keys() {
   )
 }
 
-type KeyForm = { name: string; owner: string; agent_type: string; quota: number; allowed_models: string; expires_in?: string }
+type KeyForm = { name: string; owner: string; agent_type?: string; quota: number; allowed_models: string; expires_in?: string }
 
 function KeyFormModal({
   visible,
@@ -223,8 +223,8 @@ function KeyFormModal({
       <Form<KeyForm>
         initValues={
           existing
-            ? { name: existing.name, owner: existing.owner, agent_type: existing.agent_type, quota: existing.quota_limit, allowed_models: existing.allowed_models }
-            : { name: '', owner: '', agent_type: 'claude-code', quota: 0, allowed_models: '' }
+            ? { name: existing.name, owner: existing.owner, quota: existing.quota_limit, allowed_models: existing.allowed_models }
+            : { name: '', owner: '', quota: 0, allowed_models: '' }
         }
         onSubmit={async (values) => {
           setSaving(true)
@@ -237,15 +237,7 @@ function KeyFormModal({
       >
         <Form.Input field="name" label="名称" placeholder="如 claude-code-main" rules={[{ required: true, message: '必填' }]} />
         <Form.Input field="owner" label="归属人" placeholder="可选" />
-        <Form.Select field="agent_type" label="Agent 类型" style={{ width: 240 }} placeholder="选择类型">
-          <Select.Option value="claude-code">claude-code</Select.Option>
-          <Select.Option value="codex">codex</Select.Option>
-          <Select.Option value="opencode">opencode</Select.Option>
-          <Select.Option value="hermes">hermes</Select.Option>
-          <Select.Option value="cursor">cursor</Select.Option>
-          <Select.Option value="windsurf">windsurf</Select.Option>
-          <Select.Option value="antigravity">antigravity</Select.Option>
-        </Form.Select>
+
         <Form.Input field="quota" label="额度上限" placeholder="0 = 不限" />
         <Form.Input field="allowed_models" label="允许模型（逗号分隔）" placeholder="留空 = 不限" />
         <Form.Select field="expires_in" label="有效期" style={{ width: 200 }} initValue={existing?.expires_at ? 'keep' : 'never'}>

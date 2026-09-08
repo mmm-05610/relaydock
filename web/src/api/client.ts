@@ -217,12 +217,12 @@ export const api = {
   verify: () => get<Record<string, boolean>>('/api/settings/upstream'),
 
   listKeys: () => get<VirtualKey[]>('/api/keys'),
-  createKey: (body: { name: string; owner: string; agent_type: string; quota: number; allowed_models: string; expires_in?: string }) =>
+  createKey: (body: { name: string; owner: string; agent_type?: string; quota: number; allowed_models: string; expires_in?: string }) =>
     post<{ key: string; note: string }>('/api/keys', body),
   revokeKey: (key_hash: string) => post('/api/keys/revoke', { key_hash }),
   getKey: (hash: string) =>
     get<{ key: VirtualKey; cost: number; tokens: number; requests: number; recent: UsageLog[] }>(`/api/keys/${hash}`),
-  updateKey: (hash: string, body: { name: string; owner: string; agent_type: string; quota: number; allowed_models: string; expires_in?: string }) =>
+  updateKey: (hash: string, body: { name: string; owner: string; agent_type?: string; quota: number; allowed_models: string; expires_in?: string }) =>
     put(`/api/keys/${hash}`, body),
   rotateKey: (hash: string) => post<{ key: string; note: string }>(`/api/keys/${hash}/rotate`),
   deleteKey: (hash: string) => del(`/api/keys/${hash}`),
