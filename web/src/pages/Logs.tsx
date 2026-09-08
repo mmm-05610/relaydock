@@ -22,7 +22,7 @@ export default function Logs() {
     setError('')
     try {
       const data = await api.logs({ limit: pageSize, offset: page * pageSize, model, status: status ? Number(status) : undefined })
-      setLogs(data)
+      setLogs(data ?? [])
       // 服务端无 count：取满一页假定还有下一页
       setTotal(data.length === pageSize ? (page + 1) * pageSize + 1 : (page + 1) * pageSize)
     } catch (e) {

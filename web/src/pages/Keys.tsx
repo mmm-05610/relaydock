@@ -15,7 +15,7 @@ export default function Keys() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      setKeys(await api.listKeys())
+      setKeys((await api.listKeys()) ?? [])
       setError('')
     } catch (e) {
       setError(String((e as Error).message ?? e))

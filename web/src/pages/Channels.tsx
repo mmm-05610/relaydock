@@ -32,7 +32,7 @@ export default function Channels() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      setChannels(await api.channels())
+      setChannels((await api.channels()) ?? [])
       setError('')
     } catch (e) {
       setError(String((e as Error).message ?? e))

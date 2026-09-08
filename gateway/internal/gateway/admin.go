@@ -72,6 +72,9 @@ func (g *Gateway) handleListKeys(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if ks == nil {
+		ks = []keys.Key{} // nil 序列化为 null，前端数组消费方会崩
+	}
 	writeJSON(w, ks)
 }
 
@@ -247,6 +250,9 @@ func (g *Gateway) handleTimeseries(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if pts == nil {
+		pts = []store.TimeseriesPoint{}
+	}
 	writeJSON(w, pts)
 }
 
@@ -266,6 +272,9 @@ func (g *Gateway) handleGrouped(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if gr == nil {
+		gr = []store.GroupedUsage{}
 	}
 	writeJSON(w, gr)
 }
@@ -299,6 +308,9 @@ func (g *Gateway) handleLogs(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if logs == nil {
+		logs = []store.UsageLog{}
 	}
 	writeJSON(w, logs)
 }

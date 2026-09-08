@@ -22,9 +22,9 @@ export default function Usage() {
         api.grouped({ by: 'model', days: d }),
         api.grouped({ by: 'key', days: d }),
       ])
-      setSeries(ts)
-      setByModel(m)
-      setByKey(k)
+      setSeries(ts ?? [])
+      setByModel(m ?? [])
+      setByKey(k ?? [])
     } catch (e) {
       setError(String((e as Error).message ?? e))
     } finally {

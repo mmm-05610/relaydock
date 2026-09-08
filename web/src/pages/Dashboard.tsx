@@ -30,7 +30,7 @@ export default function Dashboard() {
     Promise.all([api.dashboard(), api.timeseries({ days: 7 })])
       .then(([d, s]) => {
         setStats(d)
-        setSeries(s)
+        setSeries(s ?? [])
       })
       .catch((e) => setError(String(e.message ?? e)))
   }, [])
