@@ -44,20 +44,20 @@ export OPENAI_API_KEY="sk-你的virtual-key"
 # 例如：deepseek-v4-pro / deepseek-v4-flash / minimax-m3
 ```
 
-| 客户端   | 模型名建议                                              |
-| -------- | ------------------------------------------------------- |
-| OpenCode | `deepseek-v4-pro` / `minimax-m3`                        |
-| Codex    | `deepseek-v4-flash`（Codex 默认 responses，pro 暂未走通）|
+| 客户端   | 模型名建议                                                |
+| -------- | --------------------------------------------------------- |
+| OpenCode | `deepseek-v4-pro` / `minimax-m3`                          |
+| Codex    | `deepseek-v4-flash`（Codex 默认 responses，pro 暂未走通） |
 
 ## 可用模型清单（当前 PG / config.yaml 种子）
 
 来自 `gateway/config.yaml`（首次启动种子导入到 PG 的 `channels` + `models` 表）：
 
-| 客户端模型名      | 协议                        | 上游 model 名       | 渠道      |
-| ----------------- | --------------------------- | ------------------- | --------- |
-| `deepseek-v4-pro` | anthropic / responses / chat | `deepseek-v4-pro`   | deepseek  |
-| `deepseek-v4-flash` | anthropic / responses / chat | `deepseek-v4-flash` | deepseek  |
-| `minimax-m3`      | anthropic / responses / chat | `MiniMax-M3`        | minimax   |
+| 客户端模型名        | 协议                         | 上游 model 名       | 渠道     |
+| ------------------- | ---------------------------- | ------------------- | -------- |
+| `deepseek-v4-pro`   | anthropic / responses / chat | `deepseek-v4-pro`   | deepseek |
+| `deepseek-v4-flash` | anthropic / responses / chat | `deepseek-v4-flash` | deepseek |
+| `minimax-m3`        | anthropic / responses / chat | `MiniMax-M3`        | minimax  |
 
 > 每个模型配三条 `routes`（`/v1/messages` + `/v1/responses` + `/v1/chat/completions`），分别指向对应上游端点，纯透传。同客户端模型名可在三种协议下通用，**同协议透传避免协议转换损耗**。
 
@@ -87,11 +87,11 @@ open http://121.40.184.111/panel
 
 ## 关键差异（vs LiteLLM 时代）
 
-| 维度           | LiteLLM 时代（已废）                 | 当前 Go 网关                                     |
-| -------------- | ------------------------------------ | ------------------------------------------------ |
-| 网关 base URL  | `http://115.29.241.36:4000`          | `http://121.40.184.111`（Caddy 入口）             |
-| 端口           | 4000（直连 LiteLLM）                 | 80/443（Caddy 反代到网关 :8080）                 |
-| 模型名格式     | `供应商:模型名(协议)` 三段式          | 直白（`deepseek-v4-pro` / `minimax-m3`）        |
-| 协议选择       | 编码在 model 名后缀                  | 由请求 URL path 决定（`/v1/messages` 等）        |
-| 模型列表       | 启动从 `config.yaml` 读              | 启动从 PG 读（`config.yaml` 仅作种子）           |
-| 改模型/渠道    | 改 YAML + 重启                       | 面板「渠道」页改，热更新（`reloadChannels()`）    |
+| 维度          | LiteLLM 时代（已废）         | 当前 Go 网关                                   |
+| ------------- | ---------------------------- | ---------------------------------------------- |
+| 网关 base URL | `http://115.29.241.36:4000`  | `http://121.40.184.111`（Caddy 入口）          |
+| 端口          | 4000（直连 LiteLLM）         | 80/443（Caddy 反代到网关 :8080）               |
+| 模型名格式    | `供应商:模型名(协议)` 三段式 | 直白（`deepseek-v4-pro` / `minimax-m3`）       |
+| 协议选择      | 编码在 model 名后缀          | 由请求 URL path 决定（`/v1/messages` 等）      |
+| 模型列表      | 启动从 `config.yaml` 读      | 启动从 PG 读（`config.yaml` 仅作种子）         |
+| 改模型/渠道   | 改 YAML + 重启               | 面板「渠道」页改，热更新（`reloadChannels()`） |

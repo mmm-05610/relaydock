@@ -23,6 +23,9 @@ Claude Code / Codex / OpenCode
 
 - [DECISIONS.md](DECISIONS.md) — 架构决策（自建 Go 网关 vs LiteLLM 的取舍）
 - [architecture.md](architecture.md) — 系统架构（网关 / 计量 / key / 双服务器）
+- [software-architecture.md](software-architecture.md) — Go 单二进制内部的软件架构与核心不变量
+- [design-upstream-account-pool.md](design-upstream-account-pool.md) — 多账号池 MVP 设计
+- [research-gateway-competitors.md](research-gateway-competitors.md) — 开源网关和账号池实现调研
 - [setup.md](setup.md) — 部署（展示 + 存储双服务器）
 - [clients.md](clients.md) — 客户端接入（Claude Code / Codex / OpenCode）
 - [panel-design.md](panel-design.md) — 用量面板设计
