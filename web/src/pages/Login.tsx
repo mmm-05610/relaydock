@@ -1,7 +1,7 @@
 import { Button, Card, Form, Typography } from '@douyinfe/semi-ui'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, setToken } from '../api/client'
+import { api, ApiError, setToken } from '../api/client'
 
 const { Title, Text } = Typography
 
@@ -17,9 +17,13 @@ export default function Login() {
       setToken(values.password)
       await api.verify() // 401 会清 token 并抛错
       navigate('/', { replace: true })
-    } catch {
+    } catch (e) {
       setToken('')
-      setError('口令不正确')
+      setError(
+        e instanceof ApiError && e.status === 401
+          ? '口令不正确'
+          : `无法连接网关（${e instanceof Error ? e.message : e}），请确认 gateway 已在 :8080 运行`,
+      )
     } finally {
       setLoading(false)
     }
