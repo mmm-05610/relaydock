@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -40,6 +41,8 @@ type Gateway struct {
 	Client      *http.Client // 数据面：上游透传（无整体超时）
 	AdminClient *http.Client // 管理面：渠道测试 / 余额 / 远端模型
 	Pool        *pool.Pool   // 上游账号池运行态（并发槽 / 冷却 / 计数）
+
+	StaticDir     string    // 控制台静态目录（main 注入）
 
 	panelPassword adminAuth // 管理 API 口令
 	masterKeyHex  string    // GATEWAY_MASTER_KEY（上游凭据加解密），可空
@@ -112,6 +115,7 @@ func (g *Gateway) captureEnabled() bool { return g.logCapture.Load() }
 
 // Handler 注册全部路由并返回根 mux（含静态文件兜底）。
 func (g *Gateway) Handler(staticDir string) http.Handler {
+	g.StaticDir = staticDir
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -121,6 +125,10 @@ func (g *Gateway) Handler(staticDir string) http.Handler {
 	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]string{"version": Version})
 	})
+
+	// 兼容路由：旧部署的主页入口 /panel 指到本控制台（SPA 入口页）
+	mux.HandleFunc("GET /panel", g.serveConsoleIndex)
+	mux.HandleFunc("GET /panel.html", g.serveConsoleIndex)
 
 	// 数据面
 	mux.HandleFunc("GET /v1/models", g.handleModels)
@@ -177,6 +185,16 @@ func (g *Gateway) Handler(staticDir string) http.Handler {
 		mux.Handle("/", http.FileServer(http.Dir(staticDir)))
 	}
 	return mux
+}
+
+// serveConsoleIndex /panel 兼容入口：返回控制台 index.html（hash 路由 SPA）。
+func (g *Gateway) serveConsoleIndex(w http.ResponseWriter, r *http.Request) {
+	if g.StaticDir == "" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	http.ServeFile(w, r, filepath.Join(g.StaticDir, "index.html"))
 }
 
 // reloadChannels 渠道/模型/账号配置变更后调用：从 PG 全量重读并发布新快照。
