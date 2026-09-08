@@ -2,6 +2,7 @@ import {
   Banner,
   Button,
   Card,
+  Dropdown,
   SideSheet,
   Form,
   Input,
@@ -15,10 +16,22 @@ import {
   Typography,
 } from '@douyinfe/semi-ui'
 import { Toast } from '@douyinfe/semi-ui'
+import { IconMore } from '@douyinfe/semi-icons'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type Channel, type ChannelModel, type UpstreamAccount } from '../api/client'
 
 const { Title, Text } = Typography
+
+function confirmDeleteChannel(ch: Channel, onDeleted: () => void) {
+  Modal.confirm({
+    title: '删除渠道',
+    content: `删除 ${ch.name} 会级联删除其模型与账号（用量历史保留），确定？`,
+    onOk: async () => {
+      await api.deleteChannel(ch.provider)
+      onDeleted()
+    },
+  })
+}
 
 export default function Channels() {
   const [channels, setChannels] = useState<Channel[]>([])
@@ -95,53 +108,50 @@ export default function Channels() {
             },
             {
               title: '操作',
-              width: 330,
+              width: 150,
               render: (_: unknown, ch: Channel) => (
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: 8 }}>
                   <Button size="small" type="primary" theme="light" onClick={() => setManageProvider(ch.provider)}>
                     管理
                   </Button>
-                  <Button
-                    size="small"
-                    onClick={async () => {
-                      const r = await api.testChannel(ch.provider)
-                      r.ok ? Toast.success(`测试通过（${r.latency_ms}ms）`) : Toast.error(`失败：${r.error ?? r.status}`)
-                    }}
+                  <Dropdown
+                    trigger="click"
+                    render={
+                      <Dropdown.Menu>
+                        <Dropdown.Item
+                          onClick={async () => {
+                            const r = await api.testChannel(ch.provider)
+                            r.ok ? Toast.success(`测试通过（${r.latency_ms}ms）`) : Toast.error(`失败：${r.error ?? r.status}`)
+                          }}
+                        >
+                          测试连接
+                        </Dropdown.Item>
+                        <Dropdown.Item
+                          onClick={async () => {
+                            const r = await api.channelBalance(ch.provider)
+                            Toast.info(JSON.stringify(r))
+                          }}
+                        >
+                          查询余额
+                        </Dropdown.Item>
+                        <Dropdown.Item onClick={() => setKeyTarget(ch)}>更新凭据</Dropdown.Item>
+                        <Dropdown.Item
+                          onClick={() => {
+                            setEditing(ch)
+                            setCreateVisible(true)
+                          }}
+                        >
+                          编辑渠道
+                        </Dropdown.Item>
+                        <Dropdown.Divider />
+                        <Dropdown.Item type="danger" onClick={() => confirmDeleteChannel(ch, load)}>
+                          删除渠道
+                        </Dropdown.Item>
+                      </Dropdown.Menu>
+                    }
                   >
-                    测试
-                  </Button>
-                  <Button
-                    size="small"
-                    onClick={async () => {
-                      const r = await api.channelBalance(ch.provider)
-                      Toast.info(JSON.stringify(r))
-                    }}
-                  >
-                    余额
-                  </Button>
-                  <Button size="small" onClick={() => setKeyTarget(ch)}>
-                    凭据
-                  </Button>
-                  <Button
-                    size="small"
-                    onClick={() => {
-                      setEditing(ch)
-                      setCreateVisible(true)
-                    }}
-                  >
-                    编辑
-                  </Button>
-                  <Popconfirm
-                    title={`删除渠道 ${ch.name} 会级联删除其模型与账号，确定？`}
-                    onConfirm={async () => {
-                      await api.deleteChannel(ch.provider)
-                      load()
-                    }}
-                  >
-                    <Button size="small" type="danger">
-                      删除
-                    </Button>
-                  </Popconfirm>
+                    <Button size="small" icon={<IconMore />} />
+                  </Dropdown>
                 </div>
               ),
             },
