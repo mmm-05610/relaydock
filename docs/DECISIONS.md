@@ -104,7 +104,7 @@
 - **key 全对称加密**：上游 key AES-256-GCM 存 A 机 PG（master key 走 `GATEWAY_MASTER_KEY` env）；虚拟 key 只存 SHA-256 哈希。
 - **计量旁路**：读上游 usage（anthropic 顶层 cache 字段 / responses `details.cached_tokens` / chat `prompt_tokens`）+ 字符估算 fallback（`metering/fallback.go`，pre-call 兜底）+ 缓存计价（每模型独立单价，不是写死倍数）。
 - **单二进制零依赖**：Go 编译成 ~10MB 二进制（B 机 `gateway/bin/gateway`），systemd `gateway.service` 跑前台，B 机的 Caddy 反代 /v1/* 和 /api/* 到 `:8080`。
-- **静态面板由 gateway 直接 serve**：`mux.Handle("/", http.FileServer(http.Dir(staticDir)))`（默认 `../navpage`），Caddy 只做 TLS + 反代入口。
+- **静态面板由 gateway 直接 serve**：`mux.Handle("/", http.FileServer(http.Dir(staticDir)))`（默认 `../web/dist`），Caddy 只做 TLS + 反代入口。
 - **管理 API 认证 = PANEL_PASSWORD**（Bearer 对称口令，env 注入），不是 master key。
 
 ### 12.4 已验证结论（curl 实测 2026-08-14）

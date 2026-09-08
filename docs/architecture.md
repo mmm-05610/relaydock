@@ -68,7 +68,7 @@ LiteLLM 三条路都走不通，结论收敛到"自建"：
 | ------ | ---- | ----------------------------------------------------- |
 | 数据层 | A 机 | PostgreSQL（6 张表）                                  |
 | 服务层 | B 机 | Go 网关（透传 + 认证 + 计量 + 管理 API）              |
-| 展示层 | B 机 | 静态面板（navpage/，由 Go 网关内置 FileServer serve） |
+| 展示层 | B 机 | 管理控制台（web/ 构建产物，由 Go 网关内置 FileServer serve） |
 | 入口层 | B 机 | Caddy（TLS + 反代，唯一公网入口）                     |
 
 ## 4. 组件设计
@@ -159,14 +159,28 @@ mux.HandleFunc("POST /api/settings/password",      handleUpdatePassword)
 mux.HandleFunc("GET  /api/upstream/balance",       handleUpstreamBalance)
 
 // 静态面板（FileServer，作为 mux 兜底）
-mux.Handle("/", http.FileServer(http.Dir(staticDir)))  // 默认 ../navpage
+mux.Handle("/", http.FileServer(http.Dir(staticDir)))  // 默认 ../web/dist
 ```
 
 **监听端口**：`:8080`（`addr := ":8080"`）。Caddy 反代 /v1, /api, / 到 :8080。
 
 ### 4.2 前端面板（静态站）
 
-`navpage/` 下的 `index.html`（导航首页）+ `panel.html`（用量 + key 管理 + 渠道管理面板），由 Go 网关内置的 `http.FileServer` 直接 serve。`fetch` 调 `/api/*`。延续玻璃拟态 + 瑞士排版（见 `navpage/design.md`）。
+`web/` 下的 Vite + React 19 + Semi Design 独立控制台（构建产物 `dist/`），由 Go 网关内置的 `http.FileServer` 直接 serve。`fetch` 调 `/api/*`（统一 Bearer 口令 + 401 拦截）。
+
+页面结构（信息架构对齐 one-api / gpt-load 家族的成熟 admin 形态）：
+
+```
+侧边栏（可折叠）
+├── 概览          /api/dashboard + timeseries：今日成本/请求/成功率/缓存命中 + 7 日趋势
+├── 用量分析      timeseries + grouped：趋势图 + 按模型/按 Key 对比
+├── 请求日志      筛选表格，行展开看链路归因（渠道/账号/attempts/错误）
+├── 虚拟 Key      签发/编辑/轮换/吊销（明文仅创建时一次可见）
+├── 渠道与账号    渠道 CRUD + 模型路由 CRUD + 上游账号池健康（inflight/冷却）+ 测试
+└── 设置          上游凭据状态 / 余额查询 / 面板口令
+```
+
+开发：`cd web && npm run dev`（Vite proxy /api → :8080）；构建：`npm run build` → `dist/`。
 
 > 也可让 Caddy 直接 serve 静态文件（减少一次反代），见 [setup.md](setup.md) § Caddyfile。
 
@@ -513,7 +527,7 @@ CREATE TABLE models (
 
 - **Go 网关**：`CGO_ENABLED=0 go build -o bin/gateway ./cmd/gateway` → ~10MB 单二进制，systemd `gateway.service` 跑 B 机前台（监听 `:8080`）。
 - **Caddy**：TLS + 反代 `/v1, /api, /` → `:8080`（可选地 Caddy 直接 serve 静态面板）。
-- **静态面板**：`navpage/`（index.html + panel.html），由网关内置 `http.FileServer` serve（或 Caddy 直接 serve）。
+- **管理控制台**：`web/dist/`（Vite 构建产物），由网关内置 `http.FileServer` serve（或 Caddy 直接 serve）；源码在 `web/`。
 - **配置**：`gateway/config.yaml`（首次种子导入）+ PG `channels`/`models` 表（运行时）+ 环境变量（`DATABASE_URL` / `GATEWAY_MASTER_KEY` / `PANEL_PASSWORD` / 上游 key 回退）。
 - **迁移**：LiteLLM 下线，Go 网关接 A 机 PG 的独立库 `gateway`（不动 litellm 旧库）。`gateway/schema.sql` 一把导入。
 

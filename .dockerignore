@@ -2,14 +2,19 @@
 .git
 .github
 
-# 文档与本地产物
+# 文档
 docs
 *.md
-gateway/bin
-gateway/config.yaml
 
-# 前端静态面板运行时挂载，不进镜像（体积小，进也行，但保持构建上下文干净）
-navpage
+# 前端依赖与产物（镜像内从源码重新构建）
+web/node_modules
+web/dist
+
+# Go 本地产物
+gateway/bin
+
+# Go 生产配置（运行时挂载）
+gateway/config.yaml
 
 # 其他
 node_modules

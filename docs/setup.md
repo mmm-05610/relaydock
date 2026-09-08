@@ -16,7 +16,7 @@
   ├── gateway   :8080（systemd gateway.service，单二进制 ~10MB）
   │              ├── /v1/*         → 自建 Go 网关（透传）
   │              ├── /api/*        → 自建 Go 网关（管理 API）
-  │              └── /             → 静态面板（navpage/）
+  │              └── /             → 管理控制台（web/dist）
   └── caddy     :80/:443（唯一公网入口，TLS + 反代 /v1, /api 到 :8080）
 ```
 
@@ -72,7 +72,7 @@ psql "postgresql://gateway:你的密码@127.0.0.1:5432/gateway" \
 /opt/gateway/
 ├── gateway              # 编译产物（gateway/bin/gateway）
 ├── config.yaml          # 渠道配置（首次启动会种子导入到 PG）
-├── navpage/             # 静态面板（仓库 navpage/，含 index.html / panel.html）
+├── web/                 # 管理控制台源码（Vite + React，构建产物 dist/ 由网关 serve）
 ├── migrate              # cmd/migrate 编译产物（手动跑迁移时用）
 └── dbclean              # cmd/dbclean 编译产物（清理用量日志）
 ```
@@ -133,8 +133,8 @@ PANEL_PASSWORD=你的面板口令
 DEEPSEEK_API_KEY=sk-xxx
 MINIMAX_API_KEY=sk-cp-xxx
 
-# 静态面板目录（默认 ../navpage，相对 WorkingDirectory）
-# STATIC_DIR=/opt/gateway/navpage
+# 控制台静态目录（默认 ../web/dist，相对 WorkingDirectory）
+# STATIC_DIR=/opt/gateway/web/dist
 ```
 
 ### 录入上游 key（AES 加密存 PG）
@@ -154,7 +154,7 @@ sudo -E ./gateway keys set-upstream --provider minimax
     encode zstd gzip
     reverse_proxy /v1/*    127.0.0.1:8080
     reverse_proxy /api/*   127.0.0.1:8080
-    # 根路径 / 落到网关内置的 http.FileServer（serve /opt/gateway/navpage）
+    # 根路径 / 落到网关内置的 http.FileServer（serve /opt/gateway/web/dist）
     reverse_proxy /        127.0.0.1:8080
 }
 ```
@@ -168,7 +168,7 @@ sudo -E ./gateway keys set-upstream --provider minimax
     encode zstd gzip
     reverse_proxy /v1/*    127.0.0.1:8080
     reverse_proxy /api/*   127.0.0.1:8080
-    root * /opt/gateway/navpage
+    root * /opt/gateway/web/dist
     file_server
 }
 ```
@@ -238,7 +238,7 @@ channels:
 - **`PANEL_PASSWORD` 留空 = 管理 API 无认证**（仅开发用），生产务必设置。
 - **`DATABASE_URL` 留空 = 内存模式**——自动签发一条 bootstrap key（首次启动日志可见，仅此一次）。
 - **渠道配置改完 `config.yaml` 不会自动 reload 到 PG**——要么重启 gateway（启动时会重新种子导入，仅 PG 里没数据才导入），要么在面板里改（写 PG，`reloadChannels()` 立刻生效）。
-- **Caddy 反代 `/` 时网关会 serve `STATIC_DIR`（默认 `../navpage`）**——确认 `WorkingDirectory=/opt/gateway`，静态面板就在 `/opt/gateway/navpage/`。
+- **Caddy 反代 `/` 时网关会 serve `STATIC_DIR`（默认 `../web/dist`）**——确认 `WorkingDirectory=/opt/gateway`，静态面板就在 `/opt/gateway/web/dist/`。
 - **anthropic 协议缺 `anthropic-version` header 会被上游 401**——网关 `applyProtocolHeaders` 缺失时补 `2023-06-01` 默认值，但透传优先（客户端传了就用客户端的）。
 
 ---

@@ -43,7 +43,7 @@
   - `internal/keys/` — virtual key 管理 + 认证（SHA-256 查表）
   - `internal/config/` — 渠道配置加载
   - `cmd/migrate` / `cmd/dbclean` — 迁移 / 清理
-- `navpage/` — 导航页 + 用量面板（design.md 是设计规范）
+- `web/` — 独立管理控制台（Vite + React 19 + Semi Design + ECharts，构建产物 dist/ 由网关 FileServer serve）
 - `config.yaml` — 渠道配置（provider → models → routes → pricing）
 - CI：`.github/workflows/ci.yml`（gofmt + vet + test -race + build）；`Dockerfile`（单二进制镜像）
 

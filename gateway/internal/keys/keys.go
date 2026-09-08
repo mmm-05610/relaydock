@@ -7,15 +7,15 @@ import (
 
 // Key 虚拟 key 记录。
 type Key struct {
-	ID            int64
-	KeyHash       string
-	Name          string
-	Owner         string // 谁拥有（多用户归属）
-	AgentType     string
-	QuotaLimit    float64 // USD，0 = 不限
-	QuotaUsed     float64
-	Enabled       bool
-	AllowedModels string // 允许访问的模型（逗号分隔，空=不限）
+	ID            int64   `json:"id"`
+	KeyHash       string  `json:"key_hash"`
+	Name          string  `json:"name"`
+	Owner         string  `json:"owner"` // 谁拥有（多用户归属）
+	AgentType     string  `json:"agent_type"`
+	QuotaLimit    float64 `json:"quota_limit"` // USD，0 = 不限
+	QuotaUsed     float64 `json:"quota_used"`
+	Enabled       bool    `json:"enabled"`
+	AllowedModels string  `json:"allowed_models"` // 允许访问的模型（逗号分隔，空=不限）
 }
 
 // CanAccessModel 检查该 key 是否允许访问指定模型。
