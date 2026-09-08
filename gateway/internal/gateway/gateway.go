@@ -3,6 +3,7 @@
 package gateway
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -113,8 +114,12 @@ func (g *Gateway) captureEnabled() bool { return g.logCapture.Load() }
 func (g *Gateway) Handler(staticDir string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		_, _ = fmt.Fprintf(w, `{"status":"ok","version":%q}`, Version)
+	})
+	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]string{"version": Version})
 	})
 
 	// 数据面

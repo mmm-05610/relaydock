@@ -167,7 +167,7 @@ func main() {
 	if err != nil {
 		log.Printf("listen tcp6: %v（仅 IPv4 可用）", err)
 	}
-	log.Printf("gateway listening on tcp4 0.0.0.0:8080 + tcp6 [::]:8080")
+	log.Printf("relaydock %s listening on tcp4 0.0.0.0:8080 + tcp6 [::]:8080", gateway.Version)
 	go func() {
 		if err := srv.Serve(ln4); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("serve tcp4: %v", err)
