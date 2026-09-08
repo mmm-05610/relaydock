@@ -115,3 +115,22 @@ ALTER TABLE upstream_accounts ADD COLUMN IF NOT EXISTS last_refresh_at TIMESTAMP
 -- 虚拟 key 过期/最后使用（既有库幂等迁移）
 ALTER TABLE keys ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
 ALTER TABLE keys ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ;
+
+-- 全文请求/响应日志（方向①：观测旁路，默认关闭；正文按保留期清理）
+CREATE TABLE IF NOT EXISTS request_bodies (
+  id             BIGSERIAL PRIMARY KEY,
+  usage_request_id TEXT,               -- usage_logs.request_id（客户端请求 ID，可能为空）
+  model          TEXT NOT NULL DEFAULT '',
+  request_body   BYTEA,               -- 客户端原始请求体（未替换 model）
+  response_body  BYTEA,               -- 响应全文（SSE 为 data 载荷拼接）
+  truncated      BOOLEAN NOT NULL DEFAULT FALSE,
+  status         INTEGER,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_request_bodies_usage_rid ON request_bodies (usage_request_id, created_at DESC);
+
+-- 运行时设置（键值；控制台可改，随库持久）
+CREATE TABLE IF NOT EXISTS settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);

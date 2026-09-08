@@ -19,6 +19,9 @@ type MemStore struct {
 	logs       []UsageLog
 	channels   []config.Channel
 	accounts   []UpstreamAccount
+	settings   map[string]string
+	bodies     []LogBody
+	bodiesSeq  int64
 	nextID     int64
 	accountSeq int64
 }
@@ -27,6 +30,7 @@ func NewMemStore() *MemStore {
 	return &MemStore{
 		keys:     make(map[string]*keys.Key),
 		upstream: make(map[string][]byte),
+		settings: make(map[string]string),
 	}
 }
 
@@ -259,6 +263,9 @@ func (s *MemStore) QueryLogs(filter LogFilter) ([]UsageLog, error) {
 		if filter.Status > 0 && l.Status != filter.Status {
 			continue
 		}
+		if filter.FailedOnly && l.Status < 400 {
+			continue
+		}
 		if filter.RequestID != "" && l.RequestID != filter.RequestID {
 			continue
 		}
@@ -439,6 +446,62 @@ func (s *MemStore) DeleteUpstreamAccount(id int64) error {
 		}
 	}
 	return fmt.Errorf("account %d not found", id)
+}
+
+// --- 设置与全文日志（内存上限 500 条，超出丢最旧） ---
+
+func (s *MemStore) GetSetting(key string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.settings[key], nil
+}
+
+func (s *MemStore) SetSetting(key, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.settings[key] = value
+	return nil
+}
+
+func (s *MemStore) InsertLogBody(b *LogBody) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bodiesSeq++
+	b.ID = s.bodiesSeq
+	b.CreatedAt = time.Now()
+	s.bodies = append(s.bodies, *b)
+	if len(s.bodies) > 500 {
+		s.bodies = s.bodies[len(s.bodies)-500:]
+	}
+	return nil
+}
+
+func (s *MemStore) GetLogBodyByRequestID(usageRequestID string) (*LogBody, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for i := len(s.bodies) - 1; i >= 0; i-- {
+		if s.bodies[i].UsageRequestID == usageRequestID {
+			b := s.bodies[i]
+			return &b, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *MemStore) CleanupLogBodies(olderThan time.Time) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var kept []LogBody
+	var removed int64
+	for _, b := range s.bodies {
+		if b.CreatedAt.Before(olderThan) {
+			removed++
+			continue
+		}
+		kept = append(kept, b)
+	}
+	s.bodies = kept
+	return removed, nil
 }
 
 func (s *MemStore) SetUpstreamToken(id int64, encryptedToken []byte, expiresAt time.Time) error {

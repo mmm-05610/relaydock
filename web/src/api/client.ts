@@ -234,7 +234,7 @@ export const api = {
     get<TimeseriesPoint[]>(`/api/usage/timeseries?${new URLSearchParams(clean(params))}`),
   grouped: (params: { by: string; days?: number; from?: string; to?: string }) =>
     get<GroupedUsage[]>(`/api/usage/grouped?${new URLSearchParams(clean(params))}`),
-  logs: (params: { limit?: number; offset?: number; model?: string; status?: number; request_id?: string; days?: number }) =>
+  logs: (params: { limit?: number; offset?: number; model?: string; status?: number; request_id?: string; days?: number; failed_only?: boolean }) =>
     get<UsageLog[]>(`/api/logs?${new URLSearchParams(clean(params))}`),
   overview: (days: number) => get<UsageOverview>(`/api/usage/overview?days=${days}`),
   logsExportURL: (days: number) => `/api/logs/export?days=${days}`,
@@ -277,6 +277,12 @@ export const api = {
       expected_cooling_until: expectedCoolingUntil ?? undefined,
     }),
 
+  getLoggingSettings: () => get<{ enabled: boolean; retention_days: number; max_bytes: number }>('/api/settings/logging'),
+  updateLoggingSettings: (body: { enabled?: boolean; retention_days?: number }) => put('/api/settings/logging', body),
+  logBody: (requestId: string) =>
+    get<{ request_id: string; model: string; request_body: string; response_body: string; truncated: boolean; status: number; created_at: string }>(
+      `/api/logs/body?request_id=${encodeURIComponent(requestId)}`,
+    ),
   upstreamStatus: () => get<Record<string, boolean>>('/api/settings/upstream'),
   updatePassword: (password: string) => post('/api/settings/password', { password }),
   upstreamBalance: () => get<Record<string, Record<string, unknown>>>('/api/upstream/balance'),

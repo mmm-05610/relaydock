@@ -26,6 +26,10 @@ import (
 func (g *Gateway) proxyWithAccounts(w http.ResponseWriter, r *http.Request, snap *routing.Snapshot, m *config.Model, ch *config.Channel, route *config.Route, refs []*pool.AccountRef, originalBody []byte, clientModel string, rec *store.UsageLog) {
 	tried := map[int64]bool{}
 	attempts := 0
+	sink := &bodySink{}
+	if g.captureEnabled() {
+		sink.enabled = true
+	}
 
 	// 最近一个「可切换」错误响应，尚未转发给客户端
 	var pending *http.Response
@@ -48,8 +52,11 @@ func (g *Gateway) proxyWithAccounts(w http.ResponseWriter, r *http.Request, snap
 				resp := pending
 				pending = nil // relayUpstream 负责读完，此处不再由 defer 关闭
 				rec.AccountID = ref.Spec.ID
-				g.relayUpstream(w, resp, m, route, upstreamBody(originalBody, route, clientModel), rec)
+				g.relayUpstream(w, resp, m, route, upstreamBody(originalBody, route, clientModel), sink, rec)
 				resp.Body.Close()
+				if rec.RequestID != "" {
+					g.storeRequestBodyAsync(rec.RequestID, rec.Model, originalBody, sink, rec.Status)
+				}
 				return
 			}
 			if errors.Is(err, pool.ErrAtCapacity) {
@@ -111,9 +118,12 @@ func (g *Gateway) proxyWithAccounts(w http.ResponseWriter, r *http.Request, snap
 				ref.State.RecordResult(resp.StatusCode, v.Class.String(), fmt.Sprintf("HTTP %d", resp.StatusCode))
 			}
 			rec.AccountID = ref.Spec.ID
-			g.relayUpstream(w, resp, m, route, upstreamBody(originalBody, route, clientModel), rec)
+			g.relayUpstream(w, resp, m, route, upstreamBody(originalBody, route, clientModel), sink, rec)
 			resp.Body.Close()
 			lease.Release()
+			if rec.RequestID != "" {
+				g.storeRequestBodyAsync(rec.RequestID, rec.Model, originalBody, sink, rec.Status)
+			}
 			return
 		}
 	}

@@ -132,6 +132,11 @@ type UsageStore interface {
 	GetGrouped(by string, r TimeRange) ([]GroupedUsage, error)
 	QueryLogs(filter LogFilter) ([]UsageLog, error)
 	GetUsageOverview(days int) (*UsageOverview, error)
+	GetSetting(key string) (string, error)
+	SetSetting(key, value string) error
+	InsertLogBody(b *LogBody) error                       // 回填 b.ID
+	GetLogBodyByRequestID(usageRequestID string) (*LogBody, error)
+	CleanupLogBodies(olderThan time.Time) (int64, error)
 }
 
 // TimeRange 用量查询的时间范围（三种方式取一）。
@@ -143,13 +148,26 @@ type TimeRange struct {
 
 // LogFilter 日志查询筛选。
 type LogFilter struct {
-	KeyID     int64
-	Model     string
-	Status    int    // 0 = 不限
-	RequestID string // 客户端请求 ID（精确匹配）
-	Days      int    // 最近 N 天，0 = 不限
-	Limit     int
-	Offset    int
+	KeyID      int64
+	Model      string
+	Status     int    // 0 = 不限
+	RequestID  string // 客户端请求 ID（精确匹配）
+	Days       int    // 最近 N 天，0 = 不限
+	FailedOnly bool   // 仅失败（status >= 400）
+	Limit      int
+	Offset     int
+}
+
+// LogBody 全文请求/响应日志（观测旁路，默认关闭；正文按保留期清理）。
+type LogBody struct {
+	ID            int64
+	UsageRequestID string
+	Model         string
+	RequestBody   []byte
+	ResponseBody  []byte
+	Truncated     bool
+	Status        int
+	CreatedAt     time.Time
 }
 
 // UsageStats 用量统计（汇总 + 按模型 + 按 key）。

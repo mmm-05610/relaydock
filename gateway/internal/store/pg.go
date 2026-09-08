@@ -533,6 +533,9 @@ func (s *PgStore) QueryLogs(filter LogFilter) ([]UsageLog, error) {
 		args = append(args, filter.RequestID)
 		query += fmt.Sprintf(" AND request_id = $%d", len(args))
 	}
+	if filter.FailedOnly {
+		query += " AND status >= 400"
+	}
 	if filter.Days > 0 {
 		args = append(args, filter.Days)
 		query += fmt.Sprintf(" AND created_at > now() - ($%d || ' days')::interval", len(args))
@@ -681,6 +684,54 @@ func nullFloat(f float64) any {
 		return nil
 	}
 	return f
+}
+
+// --- 设置与全文日志 ---
+
+func (s *PgStore) GetSetting(key string) (string, error) {
+	var v string
+	err := s.pool.QueryRow(context.Background(), `SELECT value FROM settings WHERE key = $1`, key).Scan(&v)
+	if err == pgx.ErrNoRows {
+		return "", nil
+	}
+	return v, err
+}
+
+func (s *PgStore) SetSetting(key, value string) error {
+	_, err := s.pool.Exec(context.Background(),
+		`INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, key, value)
+	return err
+}
+
+func (s *PgStore) InsertLogBody(b *LogBody) error {
+	return s.pool.QueryRow(context.Background(),
+		`INSERT INTO request_bodies (usage_request_id, model, request_body, response_body, truncated, status)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at`,
+		b.UsageRequestID, b.Model, b.RequestBody, b.ResponseBody, b.Truncated, b.Status).Scan(&b.ID, &b.CreatedAt)
+}
+
+func (s *PgStore) GetLogBodyByRequestID(usageRequestID string) (*LogBody, error) {
+	var b LogBody
+	err := s.pool.QueryRow(context.Background(),
+		`SELECT id, coalesce(usage_request_id,''), coalesce(model,''), coalesce(request_body,'{}'::bytea),
+		        coalesce(response_body,'{}'::bytea), truncated, coalesce(status,0), created_at
+		 FROM request_bodies WHERE usage_request_id = $1 ORDER BY id DESC LIMIT 1`, usageRequestID).
+		Scan(&b.ID, &b.UsageRequestID, &b.Model, &b.RequestBody, &b.ResponseBody, &b.Truncated, &b.Status, &b.CreatedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &b, nil
+}
+
+func (s *PgStore) CleanupLogBodies(olderThan time.Time) (int64, error) {
+	tag, err := s.pool.Exec(context.Background(), `DELETE FROM request_bodies WHERE created_at < $1`, olderThan)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // TouchLastUsed 记录虚拟 key 最后使用时间（认证成功后旁路调用）。

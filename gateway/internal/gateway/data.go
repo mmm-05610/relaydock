@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -52,6 +53,7 @@ func (g *Gateway) handleProxy(w http.ResponseWriter, r *http.Request) {
 	rec := store.UsageLog{Attempts: 1}
 	start := time.Now()
 	var authKey *keys.Key
+	var clientReqBody []byte // 全文日志：客户端原始请求体（未替换 model）
 	loggable := false // 只有解析到真实模型路由的请求才落库（过滤 /v1/models、count_tokens 等噪声）
 	defer func() {
 		rec.LatencyMs = time.Since(start).Milliseconds()
@@ -136,6 +138,13 @@ func (g *Gateway) handleProxy(w http.ResponseWriter, r *http.Request) {
 		rec.ChannelID = ch.ID
 	}
 
+	// 全文日志（观测旁路）：客户端原始 body 副本 + 响应累积器
+	sink := &bodySink{}
+	if g.captureEnabled() {
+		sink.enabled = true
+		clientReqBody = bytes.Clone(body)
+	}
+
 	// 显式账号池路径（有账号才走 failover；否则保持单 key 兼容行为）
 	if ch != nil {
 		if refs := snap.AccountsFor(ch); len(refs) > 0 {
@@ -177,12 +186,15 @@ func (g *Gateway) handleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	g.relayUpstream(w, resp, m, route, body, &rec)
+	g.relayUpstream(w, resp, m, route, body, sink, &rec)
+	if rec.RequestID != "" {
+		g.storeRequestBodyAsync(rec.RequestID, model, clientReqBody, sink, rec.Status)
+	}
 }
 
 // relayUpstream 把上游响应转发给客户端并填充计量字段（不关闭 resp.Body，调用方管理）。
-// body 是发给上游的最终请求体（流式中断时 input 估算的输入）。
-func (g *Gateway) relayUpstream(w http.ResponseWriter, resp *http.Response, m *config.Model, route *config.Route, body []byte, rec *store.UsageLog) {
+// body 是发给上游的最终请求体（流式中断时 input 估算的输入）；sink 为全文日志累积器（可 nil）。
+func (g *Gateway) relayUpstream(w http.ResponseWriter, resp *http.Response, m *config.Model, route *config.Route, body []byte, sink *bodySink, rec *store.UsageLog) {
 	rec.Status = resp.StatusCode
 
 	// 透传响应 header
@@ -201,6 +213,9 @@ func (g *Gateway) relayUpstream(w http.ResponseWriter, resp *http.Response, m *c
 		acc := g.Meter.NewStreamAccumulator(route.Usage)
 		proxy.RelayStream(w, resp.Body, func(d []byte) {
 			acc.Feed(d)
+			if sink != nil {
+				sink.write(d)
+			}
 			if rec.RequestID == "" {
 				rec.RequestID = extractRequestID(d)
 			}
@@ -217,6 +232,9 @@ func (g *Gateway) relayUpstream(w http.ResponseWriter, resp *http.Response, m *c
 	respBody, err := io.ReadAll(resp.Body)
 	if err == nil {
 		w.Write(respBody)
+	}
+	if sink != nil {
+		sink.write(respBody)
 	}
 	rec.RequestID = extractRequestID(respBody)
 	fillMetering(rec, m, g.Meter.MeterNonStream(route.Usage, respBody))

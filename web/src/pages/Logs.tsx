@@ -1,4 +1,4 @@
-import { Banner, Button, Card, Input, Select, Table, Tag, Typography } from '@douyinfe/semi-ui'
+import { Banner, Button, Card, Input, Select, SideSheet, Spin, Table, Tabs, Tag, Typography } from '@douyinfe/semi-ui'
 import { useCallback, useEffect, useState } from 'react'
 import { api, type UsageLog } from '../api/client'
 
@@ -15,6 +15,8 @@ export default function Logs() {
   const [status, setStatus] = useState('')
   const [requestId, setRequestId] = useState('')
   const [days, setDays] = useState(7)
+  const [failedOnly, setFailedOnly] = useState(false)
+  const [bodyTarget, setBodyTarget] = useState<UsageLog | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const pageSize = 20
@@ -30,6 +32,7 @@ export default function Logs() {
         status: status ? Number(status) : undefined,
         request_id: requestId || undefined,
         days: days || undefined,
+        failed_only: failedOnly || undefined,
       })
       setLogs(data ?? [])
       // 服务端无 count：取满一页假定还有下一页
@@ -39,7 +42,7 @@ export default function Logs() {
     } finally {
       setLoading(false)
     }
-  }, [page, model, status, requestId, days])
+  }, [page, model, status, requestId, days, failedOnly])
 
   useEffect(() => {
     load()
@@ -63,6 +66,10 @@ export default function Logs() {
             <Select.Option value="0">全部</Select.Option>
           </Select>
           <Button onClick={() => { setPage(0); load() }}>查询</Button>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+            <input type="checkbox" checked={failedOnly} onChange={(e) => { setFailedOnly(e.target.checked); setPage(0) }} />
+            仅失败（status ≥ 400）
+          </label>
           <Button onClick={() => window.open(`/api/logs/export?days=${days || 30}`)}>导出 CSV</Button>
           <Text type="tertiary" size="small">
             每页 {pageSize} 条，按时间倒序
@@ -137,6 +144,23 @@ export default function Logs() {
               ellipsis: true,
               render: (v: string) => (v ? <Text type="danger" ellipsis={{ showTooltip: true }} style={{ maxWidth: 240 }}>{v}</Text> : <Text type="tertiary">-</Text>),
             },
+            {
+              title: '操作',
+              width: 90,
+              render: (_: unknown, rec: UsageLog) =>
+                rec.request_id ? (
+                  <Button
+                    size="small"
+                    onClick={async () => {
+                      setBodyTarget(rec)
+                    }}
+                  >
+                    全文
+                  </Button>
+                ) : (
+                  <Text type="tertiary">-</Text>
+                ),
+            },
           ]}
           pagination={{
             currentPage: page + 1,
@@ -147,6 +171,66 @@ export default function Logs() {
           empty="暂无日志（发一个真实请求后这里会出现记录）"
         />
       </Card>
+
+      <LogBodyDrawer rec={bodyTarget} onClose={() => setBodyTarget(null)} />
     </div>
+  )
+}
+
+// 全文详情抽屉：请求 / 响应 双 Tab
+function LogBodyDrawer({ rec, onClose }: { rec: UsageLog | null; onClose: () => void }) {
+  const [data, setData] = useState<Awaited<ReturnType<typeof api.logBody>> | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!rec?.request_id) return
+    setData(null)
+    setError('')
+    api
+      .logBody(rec.request_id)
+      .then(setData)
+      .catch((e) => setError(String((e as Error).message ?? e)))
+  }, [rec])
+
+  if (!rec) return null
+  const pretty = (s2: string) => {
+    try {
+      return JSON.stringify(JSON.parse(s2), null, 2)
+    } catch {
+      return s2
+    }
+  }
+  return (
+    <SideSheet title={<span>请求全文 · {rec.model}</span>} visible onCancel={onClose} width={860} bodyStyle={{ padding: 16 }}>
+      {error && <Banner type="danger" description={error} />}
+      {!data && !error && <Spin style={{ display: 'block', margin: '40px auto' }} />}
+      {data && (
+        <>
+          <Banner
+            type="info"
+            closeIcon={null}
+            description={
+              <span>
+                {data.model} · HTTP {data.status} · {new Date(data.created_at).toLocaleString('zh-CN')}
+                {data.truncated && <Tag color="orange" style={{ marginLeft: 8 }}>内容超长已截断</Tag>}
+              </span>
+            }
+            style={{ marginBottom: 12 }}
+          />
+          <Tabs type="line">
+            <Tabs.TabPane tab="请求体" itemKey="req">
+              <pre style={{ maxHeight: 520, overflow: 'auto', background: 'var(--semi-color-fill-0)', padding: 12, borderRadius: 6, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                {pretty(data.request_body)}
+              </pre>
+            </Tabs.TabPane>
+            <Tabs.TabPane tab="响应体" itemKey="resp">
+              <pre style={{ maxHeight: 520, overflow: 'auto', background: 'var(--semi-color-fill-0)', padding: 12, borderRadius: 6, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                {pretty(data.response_body)}
+              </pre>
+            </Tabs.TabPane>
+          </Tabs>
+        </>
+      )}
+    </SideSheet>
   )
 }

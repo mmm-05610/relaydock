@@ -1,4 +1,4 @@
-import { Banner, Button, Card, Descriptions, Form, Modal, Tag, Typography } from '@douyinfe/semi-ui'
+import { Banner, Button, Card, Descriptions, Form, Input, Modal, Switch, Tag, Typography } from '@douyinfe/semi-ui'
 import { useEffect, useState } from 'react'
 import { Toast } from '@douyinfe/semi-ui'
 import { api, setToken } from '../api/client'
@@ -8,6 +8,8 @@ const { Title, Text } = Typography
 export default function Settings() {
   const [upstream, setUpstream] = useState<Record<string, boolean>>({})
   const [balances, setBalances] = useState<Record<string, Record<string, unknown>> | null>(null)
+  const [logCapture, setLogCapture] = useState(false)
+  const [retention, setRetention] = useState('7')
   const [error, setError] = useState('')
   const [passwordVisible, setPasswordVisible] = useState(false)
 
@@ -22,6 +24,10 @@ export default function Settings() {
 
   useEffect(() => {
     load()
+    api.getLoggingSettings().then((r) => {
+      setLogCapture(r.enabled)
+      setRetention(String(r.retention_days))
+    })
   }, [])
 
   return (
@@ -69,6 +75,27 @@ export default function Settings() {
             ))}
           </div>
         )}
+      </Card>
+
+      <Card title="全文请求/响应日志" style={{ marginBottom: 16 }} bodyStyle={{ padding: 16 }}>
+        <Text type="tertiary" size="small" style={{ display: 'block', marginBottom: 12 }}>
+          开启后记录每个请求的完整请求体与响应体（观测旁路，默认关闭）。内容含对话等敏感信息，仅管理口令可见；按保留期自动清理。
+        </Text>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <Switch checked={logCapture} onChange={async (v) => {
+            const r = (await api.updateLoggingSettings({ enabled: v as boolean })) as { enabled: boolean; retention_days: number }
+            setLogCapture(r.enabled)
+            Toast.success(v ? '已开启' : '已关闭')
+          }} />
+          <Text>启用记录</Text>
+          <Text size="small" style={{ marginLeft: 16 }}>保留天数：</Text>
+          <Input value={retention} onChange={setRetention} style={{ width: 100 }} />
+          <Button size="small" onClick={async () => {
+            const r = (await api.updateLoggingSettings({ retention_days: Number(retention) || 7 })) as { enabled: boolean; retention_days: number }
+            setRetention(String(r.retention_days))
+            Toast.success('已保存')
+          }}>保存</Button>
+        </div>
       </Card>
 
       <Card title="面板口令" style={{ marginBottom: 16 }} bodyStyle={{ padding: 16 }}>

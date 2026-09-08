@@ -5,7 +5,10 @@ package gateway
 import (
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"gateway/internal/config"
 	"gateway/internal/keys"
@@ -43,6 +46,9 @@ type Gateway struct {
 	oauthMu    sync.Mutex
 	stages     map[string]*oauthStage    // OAuth 授权流程短生命周期状态
 	oauthCache map[int64]oauthLiveToken  // account_id -> 当前 access token（刷新调度器更新）
+
+	logCapture    atomic.Bool // 全文请求/响应日志开关（默认关，运行时设置）
+	logRetention  atomic.Int64
 }
 
 // New 装配网关。cfg 为启动时加载好的完整配置（渠道 + OAuth profiles），
@@ -69,8 +75,39 @@ func New(cfg *config.Config, upstreamKeys map[string]string, keyMgr *keys.Manage
 	g.stages = map[string]*oauthStage{}
 	g.oauthCache = map[int64]oauthLiveToken{}
 	go g.oauthRefreshLoop() // oauth 型账号 token 续期（daemon，进程退出自然结束）
+	g.logRetention.Store(7)
+	if db != nil {
+		g.loadLogCaptureSetting() // 全文日志开关（settings 表持久化）
+		go g.logBodyCleanupLoop()
+	}
 	return g
 }
+
+// loadLogCaptureSetting 启动时读取全文日志开关。
+func (g *Gateway) loadLogCaptureSetting() {
+	if v, err := g.DB.GetSetting("log_capture_enabled"); err == nil && v == "true" {
+		g.logCapture.Store(true)
+	}
+	if v, err := g.DB.GetSetting("log_capture_retention_days"); err == nil && v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			g.logRetention.Store(n)
+		}
+	}
+}
+
+// logBodyCleanupLoop 全文日志按保留期清理（6 小时一轮）。
+func (g *Gateway) logBodyCleanupLoop() {
+	for {
+		time.Sleep(6 * time.Hour)
+		older := time.Now().AddDate(0, 0, -int(g.logRetention.Load()))
+		if n, err := g.DB.CleanupLogBodies(older); err == nil && n > 0 {
+			log.Printf("log bodies cleaned: %d rows", n)
+		}
+	}
+}
+
+// captureEnabled 全文日志开关。
+func (g *Gateway) captureEnabled() bool { return g.logCapture.Load() }
 
 // Handler 注册全部路由并返回根 mux（含静态文件兜底）。
 func (g *Gateway) Handler(staticDir string) http.Handler {
@@ -98,6 +135,9 @@ func (g *Gateway) Handler(staticDir string) http.Handler {
 	mux.HandleFunc("GET /api/usage/grouped", g.handleGrouped)
 	mux.HandleFunc("GET /api/usage/overview", g.handleUsageOverview)
 	mux.HandleFunc("GET /api/logs/export", g.handleLogsExport)
+	mux.HandleFunc("GET /api/settings/logging", g.handleGetLoggingSettings)
+	mux.HandleFunc("PUT /api/settings/logging", g.handleUpdateLoggingSettings)
+	mux.HandleFunc("GET /api/logs/body", g.handleGetLogBody)
 	mux.HandleFunc("GET /api/logs", g.handleLogs)
 	mux.HandleFunc("GET /api/channels", g.handleChannels)
 	mux.HandleFunc("POST /api/channels", g.handleCreateChannel)
