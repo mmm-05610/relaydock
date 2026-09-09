@@ -6,7 +6,7 @@ RelayDock 是单二进制网关：前端构建产物内嵌目录 serve，存储�
 
 ```bash
 # 方式一：源码
-git clone <repo> && cd relaydock
+git clone https://github.com/mmm-05610/relaydock.git git clone <repo> && cd relaydockgit clone <repo> && cd relaydock cd relaydock
 ./install.sh                  # 构建前端 + 网关 + 生成 .env
 source .env
 cd gateway && ../bin/relaydock
