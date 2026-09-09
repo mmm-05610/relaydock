@@ -1,0 +1,69 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: 构建前端并拷入内嵌目录
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+          rm -rf ../gateway/internal/console/dist
+          mkdir -p ../gateway/internal/console
+          cp -r dist ../gateway/internal/console/dist
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway/go.mod
+      - name: 构建单二进制（控制台已内嵌）
+        working-directory: gateway
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -trimpath \
+            -ldflags="-s -w -X gateway/internal/gateway.Version=$VERSION" \
+            -o "../relaydock-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }}" \
+            ./cmd/gateway
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: relaydock-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: relaydock-*
+
+  release:
+    runs-on: ubuntu-latest
+    needs: binaries
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: 发布 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: relaydock-*
+          generate_release_notes: true

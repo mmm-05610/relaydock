@@ -32,13 +32,13 @@ type AccountState struct {
 	cooldownCause string
 
 	// 观测计数（管理面展示；成功/失败按"该账号承载的每次上游尝试"计）
-	successCount          int64
-	failureCount          int64
-	consecutiveFailures   int64
-	lastStatusCode        int
-	lastError             string
-	lastFailureClass      string // rate_limited | credential | quota | server_error | transport | client_error
-	lastUsedAt            time.Time
+	successCount        int64
+	failureCount        int64
+	consecutiveFailures int64
+	lastStatusCode      int
+	lastError           string
+	lastFailureClass    string // rate_limited | credential | quota | server_error | transport | client_error
+	lastUsedAt          time.Time
 }
 
 // RecordResult 数据面每次上游尝试结束后回写观测计数。
@@ -122,7 +122,7 @@ func (s *AccountState) coolUntil(t time.Time, cause string) {
 // Status 运行时摘要（管理面只读）。
 type Status struct {
 	Inflight            int64     `json:"inflight"`
-	CoolingUntil        time.Time `json:"cooling_until"`      // zero = 未冷却
+	CoolingUntil        time.Time `json:"cooling_until"` // zero = 未冷却
 	CooldownCause       string    `json:"cooldown_cause"`
 	SuccessCount        int64     `json:"success_count"`
 	FailureCount        int64     `json:"failure_count"`

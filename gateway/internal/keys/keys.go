@@ -13,7 +13,7 @@ type Key struct {
 	Name          string     `json:"name"`
 	Owner         string     `json:"owner"` // 谁拥有（多用户归属）
 	AgentType     string     `json:"agent_type"`
-	QuotaLimit    float64    `json:"quota_limit"`    // USD，0 = 不限
+	QuotaLimit    float64    `json:"quota_limit"` // USD，0 = 不限
 	QuotaUsed     float64    `json:"quota_used"`
 	Enabled       bool       `json:"enabled"`
 	AllowedModels string     `json:"allowed_models"` // 允许访问的模型（逗号分隔，空=不限）
@@ -147,13 +147,18 @@ func (m *Manager) Rotate(hash string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// 轮换必须继承全部约束：AllowedModels/ExpiresAt/QuotaUsed，
+	// 否则新 key 会凭空获得无限模型权限、永不过期、额度清零（权限漏洞）。
 	newKey := Key{
-		KeyHash:    SHA256Hash(raw),
-		Name:       old.Name,
-		Owner:      old.Owner,
-		AgentType:  old.AgentType,
-		QuotaLimit: old.QuotaLimit,
-		Enabled:    true,
+		KeyHash:       SHA256Hash(raw),
+		Name:          old.Name,
+		Owner:         old.Owner,
+		AgentType:     old.AgentType,
+		QuotaLimit:    old.QuotaLimit,
+		QuotaUsed:     old.QuotaUsed,
+		Enabled:       true,
+		AllowedModels: old.AllowedModels,
+		ExpiresAt:     old.ExpiresAt,
 	}
 	if err := m.store.CreateKey(newKey); err != nil {
 		return "", err

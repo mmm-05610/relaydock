@@ -178,7 +178,6 @@ func drainAndClose(resp *http.Response) {
 	_ = resp.Body.Close()
 }
 
-
 // sessionKeyOf 会话粘性键：优先 body.prompt_cache_key（Codex），
 // 其次 session-id 头；都没有则不做粘性（返回空）。
 func sessionKeyOf(body []byte, header http.Header) string {

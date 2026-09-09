@@ -99,7 +99,11 @@ func main() {
 	}
 
 	// 上游凭据：PG（AES-GCM 加密）优先，env 回退
+	insecure := os.Getenv("ALLOW_NO_AUTH") == "1"
 	panelPassword := os.Getenv("PANEL_PASSWORD")
+	if panelPassword == "" && !insecure {
+		log.Fatal("PANEL_PASSWORD 未设置：管理 API 将无认证暴露。请设置强口令；本机调试可设 ALLOW_NO_AUTH=1 豁免（网关只监听回环）")
+	}
 	// 内存模式未设 master key 时生成一次性密钥：凭据加解密在会话内可用，
 	// 重启随内存清零（凭据本就不持久），本地开发开箱即用
 	if useMemory && os.Getenv("GATEWAY_MASTER_KEY") == "" {
@@ -112,9 +116,6 @@ func main() {
 	}
 
 	upstreamKeys := loadUpstreamKeys(db, channels)
-	if panelPassword == "" {
-		log.Printf("⚠️ 未设置 PANEL_PASSWORD，管理 API 无认证（仅限开发）")
-	}
 
 	// 注意：db 声明为 *PgStore，nil 时不能直接传给 Backing 接口参数
 	//（typed-nil 陷阱：接口非 nil 但底层指针为 nil，网关内 DB==nil 检查会失效）
@@ -129,10 +130,7 @@ func main() {
 		log.Printf("snapshot rebuilt (channels + accounts)")
 	}
 
-	staticDir := os.Getenv("STATIC_DIR")
-	if staticDir == "" {
-		staticDir = "../web/dist"
-	}
+	staticDir := os.Getenv("STATIC_DIR") // 空 = 使用内嵌控制台（单二进制完整形态）
 
 	srv := &http.Server{
 		Addr:              ":8080",
@@ -159,7 +157,12 @@ func main() {
 	// ":8080" 双栈 socket 的 IPv4-mapped 回环（127.0.0.1）会被静默拒绝，
 	// Windows 侧的 localhost 转发恰好落在这一层。分别监听 tcp4/tcp6，
 	// 保证 127.0.0.1 与 [::1] 都可达；生产 Linux 双监听同样无害。
-	ln4, err := net.Listen("tcp4", "0.0.0.0:8080")
+	listenHost := "0.0.0.0"
+	if panelPassword == "" {
+		listenHost = "127.0.0.1" // 无认证豁免模式只监听回环
+		log.Printf("⚠️ 管理 API 无认证（ALLOW_NO_AUTH=1），仅监听回环")
+	}
+	ln4, err := net.Listen("tcp4", listenHost+":8080")
 	if err != nil {
 		log.Fatalf("listen tcp4: %v", err)
 	}
@@ -167,7 +170,7 @@ func main() {
 	if err != nil {
 		log.Printf("listen tcp6: %v（仅 IPv4 可用）", err)
 	}
-	log.Printf("relaydock %s listening on tcp4 0.0.0.0:8080 + tcp6 [::]:8080", gateway.Version)
+	log.Printf("relaydock %s listening on tcp4 %s:8080 + tcp6 [::]:8080", gateway.Version, listenHost)
 	go func() {
 		if err := srv.Serve(ln4); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("serve tcp4: %v", err)

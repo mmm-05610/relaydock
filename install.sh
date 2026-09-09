@@ -3,11 +3,8 @@
 set -e
 cd "$(dirname "$0")"
 
-echo "==> 构建前端"
-(cd web && npm ci && npm run build)
-
-echo "==> 构建网关"
-(cd gateway && CGO_ENABLED=0 go build -o ../bin/relaydock ./cmd/gateway)
+echo "==> 构建（前端内嵌 + 网关单二进制）"
+./build.sh "${VERSION:-dev}"
 
 echo "==> 生成配置"
 if [ ! -f .env ]; then
@@ -23,7 +20,7 @@ fi
 cat << TIP
 
 安装完成：
-  二进制      ./bin/relaydock
+  二进制      ./bin/relaydock（控制台已内嵌，单文件完整）
   启动        source .env && ./bin/relaydock   （工作目录需含 gateway/config.yaml 或已挂载）
   数据        ./data/relaydock.db（SQLite，自动建表）
   控制台      http://localhost:8080

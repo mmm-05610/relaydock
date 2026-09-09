@@ -11,3 +11,5 @@ __pycache__/
 nul
 web/dist
 data/
+gateway/internal/console/dist/
+bin/

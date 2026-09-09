@@ -53,7 +53,7 @@ type AccountStore interface {
 	CreateUpstreamAccount(a *UpstreamAccount) error // 回填 a.ID
 	UpdateUpstreamAccount(a UpstreamAccount) error
 	DeleteUpstreamAccount(id int64) error
-	AccountUsageStats(days int) ([]AccountUsage, error) // 按账号聚合最近 N 天用量（PG）
+	AccountUsageStats(days int) ([]AccountUsage, error)                          // 按账号聚合最近 N 天用量（PG）
 	SetUpstreamToken(id int64, encryptedToken []byte, expiresAt time.Time) error // oauth 刷新回写
 }
 
@@ -68,15 +68,15 @@ type UsageOverview struct {
 
 // UsageOverviewSummary 窗口内汇总。
 type UsageOverviewSummary struct {
-	Requests        int64   `json:"requests"`
-	Errors          int64   `json:"errors"`
-	SuccessRate     float64 `json:"success_rate"`
-	Tokens          int64   `json:"tokens"`
-	InputTokens     int64   `json:"input_tokens"`
-	OutputTokens    int64   `json:"output_tokens"`
-	CacheReadTokens int64   `json:"cache_read_tokens"`
-	CacheWriteTokens int64  `json:"cache_write_tokens"`
-	Cost            float64 `json:"cost"`
+	Requests         int64   `json:"requests"`
+	Errors           int64   `json:"errors"`
+	SuccessRate      float64 `json:"success_rate"`
+	Tokens           int64   `json:"tokens"`
+	InputTokens      int64   `json:"input_tokens"`
+	OutputTokens     int64   `json:"output_tokens"`
+	CacheReadTokens  int64   `json:"cache_read_tokens"`
+	CacheWriteTokens int64   `json:"cache_write_tokens"`
+	Cost             float64 `json:"cost"`
 }
 
 // UsageOverviewPoint 时间桶。
@@ -134,7 +134,7 @@ type UsageStore interface {
 	GetUsageOverview(days int) (*UsageOverview, error)
 	GetSetting(key string) (string, error)
 	SetSetting(key, value string) error
-	InsertLogBody(b *LogBody) error                       // 回填 b.ID
+	InsertLogBody(b *LogBody) error // 回填 b.ID
 	GetLogBodyByRequestID(usageRequestID string) (*LogBody, error)
 	CleanupLogBodies(olderThan time.Time) (int64, error)
 }
@@ -160,14 +160,14 @@ type LogFilter struct {
 
 // LogBody 全文请求/响应日志（观测旁路，默认关闭；正文按保留期清理）。
 type LogBody struct {
-	ID            int64
+	ID             int64
 	UsageRequestID string
-	Model         string
-	RequestBody   []byte
-	ResponseBody  []byte
-	Truncated     bool
-	Status        int
-	CreatedAt     time.Time
+	Model          string
+	RequestBody    []byte
+	ResponseBody   []byte
+	Truncated      bool
+	Status         int
+	CreatedAt      time.Time
 }
 
 // UsageStats 用量统计（汇总 + 按模型 + 按 key）。

@@ -55,7 +55,7 @@ func (g *Gateway) handleProxy(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	var authKey *keys.Key
 	var clientReqBody []byte // 全文日志：客户端原始请求体（未替换 model）
-	loggable := false // 只有解析到真实模型路由的请求才落库（过滤 /v1/models、count_tokens 等噪声）
+	loggable := false        // 只有解析到真实模型路由的请求才落库（过滤 /v1/models、count_tokens 等噪声）
 	defer func() {
 		rec.LatencyMs = time.Since(start).Milliseconds()
 		if loggable {

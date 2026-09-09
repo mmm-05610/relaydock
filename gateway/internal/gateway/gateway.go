@@ -4,15 +4,17 @@ package gateway
 
 import (
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
-	"path/filepath"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"gateway/internal/config"
+	"gateway/internal/console"
 	"gateway/internal/keys"
 	"gateway/internal/metering"
 	"gateway/internal/pool"
@@ -42,17 +44,17 @@ type Gateway struct {
 	AdminClient *http.Client // 管理面：渠道测试 / 余额 / 远端模型
 	Pool        *pool.Pool   // 上游账号池运行态（并发槽 / 冷却 / 计数）
 
-	StaticDir     string    // 控制台静态目录（main 注入）
+	StaticDir string // 控制台静态目录（main 注入）
 
 	panelPassword adminAuth // 管理 API 口令
 	masterKeyHex  string    // GATEWAY_MASTER_KEY（上游凭据加解密），可空
 
 	oauthMu    sync.Mutex
-	stages     map[string]*oauthStage    // OAuth 授权流程短生命周期状态
-	oauthCache map[int64]oauthLiveToken  // account_id -> 当前 access token（刷新调度器更新）
+	stages     map[string]*oauthStage   // OAuth 授权流程短生命周期状态
+	oauthCache map[int64]oauthLiveToken // account_id -> 当前 access token（刷新调度器更新）
 
-	logCapture    atomic.Bool // 全文请求/响应日志开关（默认关，运行时设置）
-	logRetention  atomic.Int64
+	logCapture   atomic.Bool // 全文请求/响应日志开关（默认关，运行时设置）
+	logRetention atomic.Int64
 }
 
 // New 装配网关。cfg 为启动时加载好的完整配置（渠道 + OAuth profiles），
@@ -113,9 +115,16 @@ func (g *Gateway) logBodyCleanupLoop() {
 // captureEnabled 全文日志开关。
 func (g *Gateway) captureEnabled() bool { return g.logCapture.Load() }
 
-// Handler 注册全部路由并返回根 mux（含静态文件兜底）。
+// Handler 注册全部路由并返回根 mux。
+// 控制台静态资源：STATIC_DIR 设置时用外置目录，否则用内嵌 FS（单二进制完整形态）。
 func (g *Gateway) Handler(staticDir string) http.Handler {
-	g.StaticDir = staticDir
+	var consoleFS fs.FS
+	if staticDir != "" {
+		g.StaticDir = staticDir
+		consoleFS = os.DirFS(staticDir)
+	} else if emb, err := console.FS(); err == nil {
+		consoleFS = emb
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -127,8 +136,14 @@ func (g *Gateway) Handler(staticDir string) http.Handler {
 	})
 
 	// 兼容路由：旧部署的主页入口 /panel 指到本控制台（SPA 入口页）
-	mux.HandleFunc("GET /panel", g.serveConsoleIndex)
-	mux.HandleFunc("GET /panel.html", g.serveConsoleIndex)
+	if consoleFS != nil {
+		mux.HandleFunc("GET /panel", func(w http.ResponseWriter, r *http.Request) {
+			http.ServeFileFS(w, r, consoleFS, "index.html")
+		})
+	}
+	mux.HandleFunc("GET /panel.html", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/panel", http.StatusPermanentRedirect)
+	})
 
 	// 数据面
 	mux.HandleFunc("GET /v1/models", g.handleModels)
@@ -180,21 +195,13 @@ func (g *Gateway) Handler(staticDir string) http.Handler {
 	mux.HandleFunc("POST /api/settings/password", g.handleUpdatePassword)
 	mux.HandleFunc("GET /api/upstream/balance", g.handleUpstreamBalance)
 
-	// 静态文件（前端面板），作为 fallback
-	if staticDir != "" {
-		mux.Handle("/", http.FileServer(http.Dir(staticDir)))
+	// 静态文件兜底（控制台：内嵌 FS 或外置目录）
+	if consoleFS != nil {
+		mux.Handle("/", http.FileServer(http.FS(consoleFS)))
 	}
-	return mux
-}
-
-// serveConsoleIndex /panel 兼容入口：返回控制台 index.html（hash 路由 SPA）。
-func (g *Gateway) serveConsoleIndex(w http.ResponseWriter, r *http.Request) {
-	if g.StaticDir == "" {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	http.ServeFile(w, r, filepath.Join(g.StaticDir, "index.html"))
+	// 请求体统一上限：数据面大上下文请求兜底（64MB），管理面 JSON 同限，
+	// 防止无界 body 造成内存放大
+	return http.MaxBytesHandler(mux, 64<<20)
 }
 
 // reloadChannels 渠道/模型/账号配置变更后调用：从 PG 全量重读并发布新快照。

@@ -25,7 +25,7 @@ func fakeIDToken(t *testing.T, accountID string) string {
 		return base64.RawURLEncoding.EncodeToString(b)
 	}
 	payload := map[string]any{
-		"sub":                          "user-1",
+		"sub":                         "user-1",
 		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": accountID},
 	}
 	return enc(map[string]string{"alg": "none"}) + "." + enc(payload) + ".sig"

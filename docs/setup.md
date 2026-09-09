@@ -34,7 +34,8 @@ PANEL_PASSWORD=你的口令 docker compose up -d
 | `SQLITE_PATH` | — | SQLite 文件路径（默认 `data/relaydock.db`） |
 | `DATABASE_URL` | — | 设了则用 PG（优先于 SQLite） |
 | `MEMORY` | — | `1` = 内存模式 |
-| `STATIC_DIR` | — | 控制台静态目录（默认 `web/dist` 或镜像内 `/web/dist`） |
+| `STATIC_DIR` | — | 可选：外置控制台目录覆盖。默认控制台已内嵌二进制，无需设置 |
+| `ALLOW_NO_AUTH` | — | `1` = 允许空口令启动（管理 API 无认证，且只监听回环；仅本机调试） |
 
 ## 配置文件
 

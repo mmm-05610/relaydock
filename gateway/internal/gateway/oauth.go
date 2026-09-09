@@ -343,7 +343,7 @@ func (g *Gateway) oauthTokenRequest(ctx context.Context, adminClient *http.Clien
 }
 
 // chatgptAccountIDFromIDToken 从 id_token JWT payload 提取 chatgpt_account_id
-//（claim 可能在顶层或 https://api.openai.com/auth 对象里，codex-rs token_data 语义）。
+// （claim 可能在顶层或 https://api.openai.com/auth 对象里，codex-rs token_data 语义）。
 func chatgptAccountIDFromIDToken(idToken string) string {
 	parts := strings.Split(idToken, ".")
 	if len(parts) != 3 {

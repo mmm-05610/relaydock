@@ -11,6 +11,8 @@ FROM golang:1.25-alpine AS build
 WORKDIR /src
 COPY gateway/go.mod gateway/go.sum ./
 RUN go mod download
+# 前端 dist 内嵌进二进制（单文件完整形态）
+COPY --from=webbuild /src/web/dist /src/internal/console/dist
 ARG VERSION=dev
 COPY gateway/ .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X gateway/internal/gateway.Version=${VERSION}" -o /out/gateway ./cmd/gateway
@@ -19,8 +21,6 @@ FROM alpine:3.20
 # ca-certificates：上游均为 HTTPS；tzdata：用量统计按本地时区
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=build /out/gateway /usr/local/bin/gateway
-COPY --from=webbuild /src/web/dist /web/dist
-ENV STATIC_DIR=/web/dist
 WORKDIR /app
 EXPOSE 8080
 ENTRYPOINT ["gateway"]

@@ -2,8 +2,8 @@ package gateway
 
 import (
 	"context"
-	"encoding/csv"
 	"crypto/subtle"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -789,7 +789,6 @@ func parseQuota(r io.Reader) map[string]any {
 	}
 	return map[string]any{"interval_remain_percent": interval, "weekly_remain_percent": weekly}
 }
-
 
 // expiresFromPreset 过期快捷档解析（never = 永不过期）。
 func expiresFromPreset(preset string) time.Time {

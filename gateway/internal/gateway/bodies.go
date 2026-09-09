@@ -54,7 +54,7 @@ func (g *Gateway) handleUpdateLoggingSettings(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var req struct {
-		Enabled       *bool `json:"enabled"`
+		Enabled       *bool  `json:"enabled"`
 		RetentionDays *int64 `json:"retention_days"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
