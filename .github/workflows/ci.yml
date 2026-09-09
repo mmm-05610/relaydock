@@ -30,6 +30,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 内嵌控制台占位校验通过后，用 web job 同版本源码生成真实 dist
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: 生成内嵌控制台 dist
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+          rm -rf ../gateway/internal/console/dist
+          mkdir -p ../gateway/internal/console
+          cp -r dist ../gateway/internal/console/dist
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: gateway/go.mod

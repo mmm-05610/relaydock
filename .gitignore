@@ -11,5 +11,6 @@ __pycache__/
 nul
 web/dist
 data/
-gateway/internal/console/dist/
+gateway/internal/console/dist/*
+!gateway/internal/console/dist/.gitkeep
 bin/
